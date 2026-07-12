@@ -56,9 +56,13 @@ proxy:
 # and an external cloud storage when deploying TechDocs for production use-case.
 # https://backstage.io/docs/features/techdocs/how-to-guides#how-to-migrate-from-techdocs-basic-to-recommended-deployment-approach
 techdocs:
+  # On-demand local generation: the backend runs mkdocs (via mkdocs-techdocs-core,
+  # installed into a venv in the runtime image) at view time and serves the built
+  # site from local storage. Requires the GitHub integration to clone the target
+  # repo at view time — the customer GitHub App must be able to read the repo.
   builder: 'local' # Alternatives - 'external'
   generator:
-    runIn: 'docker' # Alternatives - 'local'
+    runIn: 'local' # Alternatives - 'docker'
   publisher:
     type: 'local' # Alternatives - 'googleGcs' or 'awsS3'. Read documentation for using alternatives.
 

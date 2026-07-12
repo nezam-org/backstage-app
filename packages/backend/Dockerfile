@@ -32,6 +32,22 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     apt-get install -y --no-install-recommends libsqlite3-dev && \
     rm -rf /var/lib/apt/lists/*
 
+# TechDocs local builder: the backend runs mkdocs at view time
+# (techdocs.generator.runIn: 'local' in app-config.yaml), so mkdocs must be on
+# PATH for the node process. Debian trixie is PEP-668 "externally managed", so
+# install mkdocs-techdocs-core into a venv rather than the system Python.
+# Done as root (before `USER node`); the venv is world-readable/executable so
+# the unprivileged node user can run mkdocs from it at runtime.
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update && \
+    apt-get install -y --no-install-recommends python3 python3-pip python3-venv && \
+    rm -rf /var/lib/apt/lists/*
+ENV VIRTUAL_ENV=/opt/venv
+RUN python3 -m venv $VIRTUAL_ENV
+ENV PATH="$VIRTUAL_ENV/bin:$PATH"
+RUN pip3 install mkdocs-techdocs-core==1.7.0
+
 # From here on we use the least-privileged `node` user to run the backend.
 USER node
 
