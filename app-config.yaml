@@ -30,12 +30,6 @@ backend:
   database:
     client: better-sqlite3
     connection: ':memory:'
-  # see https://backstage.io/docs/ai/mcp-actions#actions-configuration for more details
-  actions:
-    pluginSources:
-      - auth
-      - catalog
-      - scaffolder
   # workingDirectory: /tmp # Use this to configure a working directory for the scaffolder, defaults to the OS temp-dir
 
 integrations:
@@ -117,32 +111,7 @@ catalog:
     pullRequestBranchName: backstage-integration
   rules:
     - allow: [Component, System, API, Resource, Location]
-  locations:
-    # Local example data, file locations are relative to the backend process, typically `packages/backend`
-    - type: file
-      target: ../../examples/entities.yaml
-
-    # Local example template
-    - type: file
-      target: ../../examples/template/template.yaml
-      rules:
-        - allow: [Template]
-
-    # Local example organizational data
-    - type: file
-      target: ../../examples/org.yaml
-      rules:
-        - allow: [User, Group]
-
-    ## Uncomment these lines to add more example data
-    # - type: url
-    #   target: https://github.com/backstage/backstage/blob/master/packages/catalog-model/examples/all.yaml
-
-    ## Uncomment these lines to add an example org
-    # - type: url
-    #   target: https://github.com/backstage/backstage/blob/master/packages/catalog-model/examples/acme-corp.yaml
-    #   rules:
-    #     - allow: [User, Group]
+  locations: []
 
 kubernetes:
   # see https://backstage.io/docs/features/kubernetes/configuration for kubernetes configuration options
@@ -151,8 +120,3 @@ kubernetes:
 permission:
   # setting this to `false` will disable permissions
   enabled: true
-
-# see https://backstage.io/docs/ai/mcp-actions for more details
-mcpActions:
-  name: 'My Company Backstage' # defaults to "backstage"
-  description: 'Tools for managing your software catalog, creating new services from templates, and exploring your developer portal' # optional

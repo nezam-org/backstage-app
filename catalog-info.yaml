@@ -1,13 +1,9 @@
 apiVersion: backstage.io/v1alpha1
 kind: Component
 metadata:
-  name: backstage-app
-  description: An example of a Backstage application.
-  # Example for optional annotations
-  # annotations:
-  #   github.com/project-slug: backstage/backstage
-  #   backstage.io/techdocs-ref: dir:.
+  name: backstage
+  description: Nezam developer portal
 spec:
   type: website
-  owner: john@example.com
+  owner: nezam-org
   lifecycle: experimental
