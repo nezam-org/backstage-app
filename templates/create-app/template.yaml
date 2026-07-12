@@ -59,15 +59,22 @@ spec:
             allowedHosts:
               - github.com
             # Ask GitHub (via the sign-in OAuth app) for a user token carrying
-            # `repo` scope, JUST for this scaffold run. This pops a consent the
-            # first time — it does NOT require changing the OAuth app
+            # `repo` + `workflow` scope, JUST for this scaffold run. This pops a
+            # consent the first time — it does NOT require changing the OAuth app
             # registration (scopes are requested per-authorization). The token
             # is exposed to steps as ${{ secrets.USER_OAUTH_TOKEN }}.
+            #   repo     — create + push the user's new repository.
+            #   workflow — the batteries-included scaffold ships a CI workflow
+            #              (.github/workflows/ci.yaml); GitHub refuses to let an
+            #              OAuth token push ANY file under .github/workflows/
+            #              without this scope. Surfaced on the first live push
+            #              (027 T4, 2026-07-12).
             requestUserCredentials:
               secretsKey: USER_OAUTH_TOKEN
               additionalScopes:
                 github:
                   - repo
+                  - workflow
 
   # ---------------------------------------------------------------------------
   # STEPS
