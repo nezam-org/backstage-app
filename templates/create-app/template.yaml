@@ -29,9 +29,11 @@ spec:
           title: App name
           type: string
           description: >-
-            Lowercase letters, numbers and dashes only. Becomes the repo name,
-            the hostnames (<app>-staging.nezam.site / <app>.nezam.site) and the
-            tenant namespaces. Keep it short — the derived Postgres role
+            This is your app AND GitHub repository name. It creates
+            `<your-github-login>/<name>` in your account. Lowercase letters,
+            numbers and dashes only. Also becomes the hostnames
+            (<app>-staging.nezam.site / <app>.nezam.site) and the tenant
+            namespaces. Keep it short — the derived Postgres role
             (<user>_<app>) must stay under 55 chars.
           # Mirror the register-tenant.sh constraint: ^[a-z0-9-]+$.
           pattern: '^[a-z0-9]([a-z0-9-]*[a-z0-9])?$'
@@ -42,39 +44,28 @@ spec:
           type: string
           description: One line describing what the app does.
 
-    - title: Repository
-      required:
-        - repoUrl
-      properties:
-        repoUrl:
-          title: Repository location
+        # ---------------------------------------------------------------------
+        # ONE name only. There is NO repo picker — the repo is ALWAYS
+        # <signed-in user>/<appName>, so app name and repo name CANNOT diverge
+        # (the bug this template previously allowed: appName=nezam-todo but
+        # repo=nezam-todo-app → Flux pointed at a repo that didn't exist).
+        #
+        # The RepoUrlPicker used to also mint the user OAuth token (via
+        # requestUserCredentials). It's gone, so this custom field extension
+        # (packages/app/src/scaffolder/GithubRepoTokenField) mints the same
+        # token — github.com, scopes [repo, workflow] — and injects it as the
+        # scaffolder secret ${{ secrets.USER_OAUTH_TOKEN }} that publish:github
+        # consumes below. It renders a one-line "connecting to GitHub" note.
+        #   repo     — create + push the user's new repository.
+        #   workflow — the batteries-included scaffold ships a CI workflow
+        #              (.github/workflows/ci.yaml); GitHub refuses to let an
+        #              OAuth token push ANY file under .github/workflows/
+        #              without this scope (027 T4, 2026-07-12).
+        # ---------------------------------------------------------------------
+        githubToken:
+          title: GitHub access
           type: string
-          # RepoUrlPicker in "owner is fixed to the signed-in user" mode is not
-          # a thing; instead we request an OAuth token with `repo` scope at
-          # scaffold time (requestUserCredentials.additionalScopes) so the
-          # publish step can create the repo in the user's OWN account. The
-          # user picks the owner (their username) + types the repo name.
-          ui:field: RepoUrlPicker
-          ui:options:
-            allowedHosts:
-              - github.com
-            # Ask GitHub (via the sign-in OAuth app) for a user token carrying
-            # `repo` + `workflow` scope, JUST for this scaffold run. This pops a
-            # consent the first time — it does NOT require changing the OAuth app
-            # registration (scopes are requested per-authorization). The token
-            # is exposed to steps as ${{ secrets.USER_OAUTH_TOKEN }}.
-            #   repo     — create + push the user's new repository.
-            #   workflow — the batteries-included scaffold ships a CI workflow
-            #              (.github/workflows/ci.yaml); GitHub refuses to let an
-            #              OAuth token push ANY file under .github/workflows/
-            #              without this scope. Surfaced on the first live push
-            #              (027 T4, 2026-07-12).
-            requestUserCredentials:
-              secretsKey: USER_OAUTH_TOKEN
-              additionalScopes:
-                github:
-                  - repo
-                  - workflow
+          ui:field: GithubRepoToken
 
   # ---------------------------------------------------------------------------
   # STEPS
@@ -82,25 +73,27 @@ spec:
   steps:
     # 0. Guard the derived Postgres role length BEFORE anything is created.
     #    register-tenant.sh HARD-FAILS if the role (<owner>_<app>, dashes → _)
-    #    exceeds 55 chars. The form can only bound appName (maxLength 40) — it
-    #    cannot see the variable-length <owner> from the RepoUrlPicker, so a
+    #    exceeds 55 chars. The form bounds appName (maxLength 40) but cannot see
+    #    the variable-length <owner> (the signed-in user's GitHub login), so a
     #    long username + long app name can compose an over-limit role that would
     #    otherwise only blow up much later (register-tenant.sh / CNPG). Fail
     #    FAST here with a clear message. `value` uses the SAME nunjucks
     #    expression that step 6 stamps into database.yaml's `owner:` field, so
     #    the length counted here IS the real role length.
+    #    owner = ${{ user.entity.metadata.name }} — sign-in uses
+    #    usernameMatchingUserEntityName, so the Backstage user entity name IS
+    #    the GitHub login.
     - id: assert-role-length
       name: Check the derived Postgres role fits (≤ 55 chars)
       action: nezam:assert:maxLength
       input:
-        value: ${{ (parameters.repoUrl | parseRepoUrl | pick('owner') + "-" + parameters.appName) | replace("-", "_") }}
+        value: ${{ (user.entity.metadata.name + "-" + parameters.appName) | replace("-", "_") }}
         max: 55
         message: Postgres role
 
-    # 1. Derive the owner (the signed-in user picks their own account in the
-    #    RepoUrlPicker) — parse it back out of the chosen repoUrl so downstream
-    #    steps have a plain <owner> and <repo> to substitute.
-    #    (parseRepoUrl → { host, owner, repo })
+    # 1. Owner is the signed-in user — ${{ user.entity.metadata.name }}. There
+    #    is NO repo picker: the repo is ALWAYS <owner>/<appName>, so app name
+    #    and repo name cannot diverge.
 
     # 2. Fetch the app template VERBATIM. fetch:plain copies bytes untouched —
     #    it does NOT run nunjucks — so the template's literal __USER__/__APP__
@@ -127,18 +120,21 @@ spec:
           # ORDER: no compound __USER_____APP__ token exists in the APP repo
           # (that token is platform-tenant-only), so plain user/app is safe.
           - find: __USER__
-            replaceWith: ${{ parameters.repoUrl | parseRepoUrl | pick('owner') }}
+            replaceWith: ${{ user.entity.metadata.name }}
           - find: __APP__
             replaceWith: ${{ parameters.appName }}
 
-    # 4. Create the repo in the USER's account (model b) with the user's OAuth
-    #    token. publish:github creates + pushes; the token carries `repo`
-    #    scope from requestUserCredentials above.
+    # 4. Create the repo in the USER's account with the user's OAuth token.
+    #    The publish target is built HERE from the single appName + the derived
+    #    owner: github.com?owner=<signed-in user>&repo=<appName>. There is no
+    #    user-supplied repo name — appName IS the repo name. publish:github
+    #    creates + pushes; the token (secret USER_OAUTH_TOKEN, minted by the
+    #    GithubRepoToken field) carries repo + workflow scope.
     - id: publish-app
       name: Create your repository
       action: publish:github
       input:
-        repoUrl: ${{ parameters.repoUrl }}
+        repoUrl: github.com?owner=${{ user.entity.metadata.name }}&repo=${{ parameters.appName }}
         description: ${{ parameters.description }}
         defaultBranch: main
         repoVisibility: public
@@ -168,9 +164,9 @@ spec:
         globPattern: tenant/**/*
         replacements:
           - find: __USER_____APP__
-            replaceWith: ${{ (parameters.repoUrl | parseRepoUrl | pick('owner') + "-" + parameters.appName) | replace("-", "_") }}
+            replaceWith: ${{ (user.entity.metadata.name + "-" + parameters.appName) | replace("-", "_") }}
           - find: __USER__
-            replaceWith: ${{ parameters.repoUrl | parseRepoUrl | pick('owner') }}
+            replaceWith: ${{ user.entity.metadata.name }}
           - find: __APP__
             replaceWith: ${{ parameters.appName }}
 
@@ -185,24 +181,24 @@ spec:
       action: publish:github:pull-request
       input:
         repoUrl: github.com?owner=nezam-org&repo=nezam-devops-k3s
-        branchName: tenant/${{ parameters.repoUrl | parseRepoUrl | pick('owner') }}-${{ parameters.appName }}
-        title: "tenant: add ${{ parameters.repoUrl | parseRepoUrl | pick('owner') }}/${{ parameters.appName }}"
+        branchName: tenant/${{ user.entity.metadata.name }}-${{ parameters.appName }}
+        title: 'tenant: add ${{ user.entity.metadata.name }}/${{ parameters.appName }}'
         description: |
           ## New tenant app — merge to approve
 
           Requested via the developer portal by
-          **@${{ parameters.repoUrl | parseRepoUrl | pick('owner') }}**.
+          **@${{ user.entity.metadata.name }}**.
 
           - App repo (created in the user's account):
-            `${{ parameters.repoUrl | parseRepoUrl | pick('owner') }}/${{ parameters.appName }}`
-          - Adds `k8s/tenants/${{ parameters.repoUrl | parseRepoUrl | pick('owner') }}/${{ parameters.appName }}/`
+            `${{ user.entity.metadata.name }}/${{ parameters.appName }}`
+          - Adds `k8s/tenants/${{ user.entity.metadata.name }}/${{ parameters.appName }}/`
             (staging + prod namespaces, quota, Cilium fence, RBAC impersonation,
             CNPG Databases, Flux GitRepositories + Kustomizations, PR-preview
             ResourceSet).
 
           ### Owner checklist before merge (see runbook "Register a tenant app")
           These secrets are NOT in git and MUST exist for the app to run:
-          1. `github-app-${{ parameters.repoUrl | parseRepoUrl | pick('owner') }}` in `flux-system`
+          1. `github-app-${{ user.entity.metadata.name }}` in `flux-system`
              (the user's GitHub App installation creds — Flux source auth).
           2. The DB role + password Secret pair and the CNPG `managed.roles`
              entry printed by `scripts/register-tenant.sh` (run it to get the
@@ -215,7 +211,7 @@ spec:
         # The stamped tenant dir must land at k8s/tenants/<user>/<app>/ in the
         # target repo. sourcePath picks the local subtree; targetPath places it.
         sourcePath: ./tenant
-        targetPath: k8s/tenants/${{ parameters.repoUrl | parseRepoUrl | pick('owner') }}/${{ parameters.appName }}
+        targetPath: k8s/tenants/${{ user.entity.metadata.name }}/${{ parameters.appName }}
 
     # 8. Register the new app's Component in the portal catalog so it shows up
     #    on the user's dashboard immediately (ties to T3). Reads catalog-info.yaml
