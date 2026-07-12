@@ -77,12 +77,49 @@ catalog:
       target: https://github.com/nezam-org/nezam-devops-k3s/blob/main/k8s/portal/allowlist-users.yaml
       rules:
         - allow: [User, Group]
+    # Demo tenant app (027 T3). Registers hello-nezam's Component from its
+    # catalog-info.yaml (private repo, read via the nezam-platform GitHub App
+    # integration above). The Component's backstage.io/kubernetes-id annotation
+    # links it to its live workloads on the Kubernetes tab. This is a MANUAL
+    # per-app entry for now — T4's scaffolder/registration will automate adding
+    # one catalog.location per tenant app at create time.
+    - type: url
+      target: https://github.com/ma-shaaban/hello-nezam/blob/main/catalog-info.yaml
+      rules:
+        - allow: [Component]
     # Scaffolder templates are registered in T4 (027 phase 1) — intentionally
     # empty for now.
 
 kubernetes:
   serviceLocatorMethod:
     type: 'multiTenant'
+  # Custom resources the kubernetes tab fetches for an entity IN ADDITION to
+  # the core workloads (deployments/pods/services/…). These are the CRs a
+  # tenant app owns on this platform; each is matched to the entity the same
+  # way as core workloads — by the backstage.io/kubernetes-id label on the CR
+  # object (the platform applies that label to the tenant's Flux + CNPG CRs;
+  # the app's own workloads get it from the repo's kustomize `labels`). The
+  # read-only ServiceAccount ClusterRole (platform repo, k8s/apps/backstage/
+  # service-account.yaml) grants get/list/watch on exactly these groups.
+  customResources:
+    # Flux GitOps objects (source + apply state for the app's envs).
+    - group: 'source.toolkit.fluxcd.io'
+      apiVersion: 'v1'
+      plural: 'gitrepositories'
+    - group: 'kustomize.toolkit.fluxcd.io'
+      apiVersion: 'v1'
+      plural: 'kustomizations'
+    - group: 'helm.toolkit.fluxcd.io'
+      apiVersion: 'v2'
+      plural: 'helmreleases'
+    # CNPG — the app's database (per-env Database CR) and, if it owns one, its
+    # Postgres Cluster.
+    - group: 'postgresql.cnpg.io'
+      apiVersion: 'v1'
+      plural: 'clusters'
+    - group: 'postgresql.cnpg.io'
+      apiVersion: 'v1'
+      plural: 'databases'
   clusterLocatorMethods:
     - type: 'config'
       clusters:
