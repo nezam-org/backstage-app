@@ -1,0 +1,78 @@
+# templates/tenant/netpol.yaml
+# Accident fence (CiliumNetworkPolicy): ingress from the Cilium Gateway/Envoy
+# + same-namespace; egress to DNS, the shared appdb postgres, and the world
+# (apps may call external APIs).
+#
+# Two entities are required for Gateway→pod traffic (live-debugged 2026-07-08,
+# same root cause as k8s/platform/cert-manager-issuers/acme-solver-netpol.yaml):
+#   - ingress     : same-node path — Cilium Gateway/Envoy → pod carries the
+#                   reserved `ingress` identity (does NOT match `host`).
+#   - remote-node : cross-node path — when the receiving Envoy proxies to a pod
+#                   on ANOTHER node the destination node's ipcache resolves the
+#                   source IP to `remote-node` (identity 6); `ingress` alone
+#                   silently denies cross-node gateway traffic.
+# Using `host` here would MISS same-node Envoy traffic; omitting `remote-node`
+# would block ALL cross-node gateway→tenant traffic.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: tenant-fence
+  namespace: __USER__-__APP__-staging
+spec:
+  endpointSelector: {}
+  ingress:
+    - fromEntities:
+        - ingress     # same-node: Cilium Gateway/Envoy → pod (ingress identity — does NOT match `host`)
+        - remote-node # cross-node: the OTHER node's Envoy → pod (ingress identity doesn't survive the hop)
+    - fromEndpoints:
+        - {}
+  egress:
+    - toEndpoints:
+        - matchLabels:
+            io.kubernetes.pod.namespace: kube-system
+            k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: ANY
+    - toEndpoints:
+        - matchLabels:
+            io.kubernetes.pod.namespace: appdb
+      toPorts:
+        - ports:
+            - port: "5432"
+              protocol: TCP
+    - toEntities:
+        - world
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: tenant-fence
+  namespace: __USER__-__APP__-prod
+spec:
+  endpointSelector: {}
+  ingress:
+    - fromEntities:
+        - ingress     # same-node: Cilium Gateway/Envoy → pod (ingress identity — does NOT match `host`)
+        - remote-node # cross-node: the OTHER node's Envoy → pod (ingress identity doesn't survive the hop)
+    - fromEndpoints:
+        - {}
+  egress:
+    - toEndpoints:
+        - matchLabels:
+            io.kubernetes.pod.namespace: kube-system
+            k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: ANY
+    - toEndpoints:
+        - matchLabels:
+            io.kubernetes.pod.namespace: appdb
+      toPorts:
+        - ports:
+            - port: "5432"
+              protocol: TCP
+    - toEntities:
+        - world

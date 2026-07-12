@@ -1,0 +1,294 @@
+# templates/tenant/preview.yaml
+# PR preview environments (task 026, ADR-024). The whole flow:
+#
+#   label a PR `preview` on the app repo
+#     → ResourceSetInputProvider polls GitHub (App auth, every 2m) and
+#       exports one input set per labeled PR: {id, sha, branch, author, title}
+#     → ResourceSet stamps ONE env per input: namespace
+#       __USER__-__APP__-pr-<id> (halved quota, same Cilium fence and
+#       flux-tenant impersonation as staging/prod), an app-db Secret COPIED
+#       from the staging namespace, a GitRepository pinned to the PR HEAD
+#       commit, and a Flux Kustomization applying the app repo's
+#       deploy/preview overlay (image tag pr-<id>-<short-sha> injected via
+#       postBuild.substitute — the T2 template-repo contract)
+#     → app serves at https://__APP__-pr-<id>.nezam.site (wildcard cert +
+#       locality-dns cover it, zero DNS work).
+#   unlabel / close / merge the PR
+#     → the input vanishes → the operator's STAGED garbage collection
+#       removes everything stamped (Flux CRs finalized first, so the app
+#       Kustomization prunes its objects before its ServiceAccount dies).
+#
+# DB DECISION (v1, read this before "fixing" it): previews share the
+# tenant's STAGING database. There is NO per-PR CNPG Database here — the
+# app-db password lives only in manually-created Secrets (024 trust model,
+# absorbed by task 019 later), so a per-PR database would need per-PR
+# credential automation we don't have yet. Instead the operator-native
+# `fluxcd.controlplane.io/copyFrom` copies staging's app-db Secret (incl.
+# dbname → the staging DB) into each pr namespace. Preview code sees
+# staging-ish data — an accepted, documented trade (ADR-024 amendment).
+# Task 019 (secrets automation) is the path back to per-PR databases
+# (CNPG `databaseReclaimPolicy: delete` verified for corpse-free GC).
+#
+# Both objects live in flux-system: the RSIP because its secretRef must be
+# same-namespace (it reuses the tenant's GitHub App secret — RSIP accepts
+# the exact same key names githubAppID/githubAppInstallationID/
+# githubAppPrivateKey, verified against flux-operator v0.54.1 docs), and
+# the ResourceSet because inputsFrom only reaches same-namespace providers.
+apiVersion: fluxcd.controlplane.io/v1
+kind: ResourceSetInputProvider
+metadata:
+  name: __USER__-__APP__-prs
+  namespace: flux-system
+  annotations:
+    # Previews deserve snappier than the 10m default; a PR-list poll per
+    # tenant app every 2m is trivial API load (webhook Receiver = later).
+    fluxcd.controlplane.io/reconcileEvery: "2m"
+spec:
+  type: GitHubPullRequest
+  url: https://github.com/__USER__/__APP__
+  secretRef:
+    name: github-app-__USER__ # SAME secret as sync.yaml — no second shape needed
+  filter:
+    labels:
+      - preview # opt-in: only labeled PRs get an env
+    limit: 2 # capacity cap per app — a 3rd labeled PR is silently ignored
+---
+# PR preview-URL comments (task 026 T4). notification-controller posts (and
+# keeps updating in place) a "Flux Status" comment on the labeled PR the moment
+# its preview Kustomization reconciles. Two objects, split by lifetime:
+#
+#   Provider (HERE, static, ONE per tenant app) — the GitHub endpoint + auth.
+#   Alert (in the ResourceSet below, ONE per PR) — binds the per-PR Kustomization
+#     to this Provider. It MUST be per-PR because notification-controller matches
+#     an event to an Alert source by EXACT namespace equality (verified in
+#     internal/server/event_handlers.go: `event...Namespace != source.Namespace
+#     → no match`; the `*` wildcard is name-only, there is NO namespace
+#     wildcard). Each preview Kustomization lives in its own
+#     __USER__-__APP__-pr-<id> namespace, so one static Alert could never reach
+#     them all — the Alert is templated per input instead.
+#
+# AUTH: reuses the SAME GitHub App secret as the RSIP/GitRepositories — no token
+# secret needed. notification-controller's githubpullrequestcomment provider
+# accepts GitHub App creds in the identical key shape Flux GitRepository uses
+# (githubAppID/githubAppInstallationID/githubAppPrivateKey — verified against
+# notification-controller docs/spec/v1beta3/providers.md, "GitHub App"). PREREQ
+# (owner-done 2026-07-12): the App has "Pull requests: Read & write" +
+# installation re-approved. The comment is keyed on the per-PR Kustomization's
+# `event.toolkit.fluxcd.io/change_request` annotation (already stamped, T3/D5);
+# `preview-url` + branch/author ride along as event metadata automatically
+# (notification-controller reads `event.toolkit.fluxcd.io/*` object annotations).
+apiVersion: notification.toolkit.fluxcd.io/v1beta3
+kind: Provider
+metadata:
+  name: __USER__-__APP__-pr-comment
+  namespace: flux-system
+spec:
+  type: githubpullrequestcomment
+  address: https://github.com/__USER__/__APP__
+  secretRef:
+    name: github-app-__USER__ # App auth, same secret as the RSIP — no token
+---
+apiVersion: fluxcd.controlplane.io/v1
+kind: ResourceSet
+metadata:
+  name: __USER__-__APP__-previews
+  namespace: flux-system
+spec:
+  inputsFrom:
+    - apiVersion: fluxcd.controlplane.io/v1
+      kind: ResourceSetInputProvider
+      name: __USER__-__APP__-prs
+  resources:
+    # ---- per-PR env skeleton: the 024 per-env pattern, preview-sized ----
+    - apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: __USER__-__APP__-pr-<< inputs.id >>
+        labels:
+          tenant.nezam.io/user: "__USER__"
+          tenant.nezam.io/app: "__APP__"
+          preview: "true"
+    # Halve the standard env quota — previews are lighter (1 replica).
+    - apiVersion: v1
+      kind: ResourceQuota
+      metadata:
+        name: tenant-quota
+        namespace: __USER__-__APP__-pr-<< inputs.id >>
+      spec:
+        hard:
+          requests.cpu: "250m"
+          requests.memory: 256Mi
+          limits.memory: 512Mi
+          pods: "5"
+    - apiVersion: v1
+      kind: LimitRange
+      metadata:
+        name: tenant-defaults
+        namespace: __USER__-__APP__-pr-<< inputs.id >>
+      spec:
+        limits:
+          - type: Container
+            default:
+              memory: 128Mi
+            defaultRequest:
+              cpu: 25m
+              memory: 64Mi
+    # Accident fence — copy of netpol.yaml's tenant-fence (see that file's
+    # header for the hard-won ingress+remote-node story; do not "simplify").
+    - apiVersion: cilium.io/v2
+      kind: CiliumNetworkPolicy
+      metadata:
+        name: tenant-fence
+        namespace: __USER__-__APP__-pr-<< inputs.id >>
+      spec:
+        endpointSelector: {}
+        ingress:
+          - fromEntities:
+              - ingress     # same-node: Cilium Gateway/Envoy → pod (ingress identity — does NOT match `host`)
+              - remote-node # cross-node: the OTHER node's Envoy → pod (ingress identity doesn't survive the hop)
+          - fromEndpoints:
+              - {}
+        egress:
+          - toEndpoints:
+              - matchLabels:
+                  io.kubernetes.pod.namespace: kube-system
+                  k8s-app: kube-dns
+            toPorts:
+              - ports:
+                  - port: "53"
+                    protocol: ANY
+          - toEndpoints:
+              - matchLabels:
+                  io.kubernetes.pod.namespace: appdb
+            toPorts:
+              - ports:
+                  - port: "5432"
+                    protocol: TCP
+          - toEntities:
+              - world
+    # Impersonation identical to staging/prod (rbac.yaml): namespace-admin
+    # RoleBinding + the httproute-manager Role the built-in `admin` role
+    # lacks — deploy/preview inherits the base HTTPRoute, so without this
+    # the preview Kustomization 403s exactly like staging would.
+    - apiVersion: v1
+      kind: ServiceAccount
+      metadata:
+        name: flux-tenant
+        namespace: __USER__-__APP__-pr-<< inputs.id >>
+    - apiVersion: rbac.authorization.k8s.io/v1
+      kind: RoleBinding
+      metadata:
+        name: flux-tenant-admin
+        namespace: __USER__-__APP__-pr-<< inputs.id >>
+      roleRef:
+        apiGroup: rbac.authorization.k8s.io
+        kind: ClusterRole
+        name: admin # namespace-admin only — RoleBinding scopes it to this ns
+      subjects:
+        - kind: ServiceAccount
+          name: flux-tenant
+          namespace: __USER__-__APP__-pr-<< inputs.id >>
+    - apiVersion: rbac.authorization.k8s.io/v1
+      kind: Role
+      metadata:
+        name: httproute-manager
+        namespace: __USER__-__APP__-pr-<< inputs.id >>
+      rules:
+        - apiGroups: ["gateway.networking.k8s.io"]
+          resources: ["httproutes"]
+          verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+    - apiVersion: rbac.authorization.k8s.io/v1
+      kind: RoleBinding
+      metadata:
+        name: flux-tenant-httproutes
+        namespace: __USER__-__APP__-pr-<< inputs.id >>
+      roleRef:
+        apiGroup: rbac.authorization.k8s.io
+        kind: Role
+        name: httproute-manager
+      subjects:
+        - kind: ServiceAccount
+          name: flux-tenant
+          namespace: __USER__-__APP__-pr-<< inputs.id >>
+    # DB creds: operator-copied from staging (see DB DECISION in the file
+    # header). copyFrom re-syncs on every ResourceSet reconciliation, so a
+    # rotated staging password propagates without manual steps.
+    - apiVersion: v1
+      kind: Secret
+      metadata:
+        name: app-db
+        namespace: __USER__-__APP__-pr-<< inputs.id >>
+        annotations:
+          fluxcd.controlplane.io/copyFrom: "__USER__-__APP__-staging/app-db"
+    # ---- source + sync pinned to the PR HEAD ----
+    # GitRepository in flux-system next to its App secret (same deliberate
+    # cross-ns sourceRef deviation as sync.yaml).
+    - apiVersion: source.toolkit.fluxcd.io/v1
+      kind: GitRepository
+      metadata:
+        name: __USER__-__APP__-pr-<< inputs.id >>
+        namespace: flux-system
+      spec:
+        # ref.commit is immutable; a push to the PR = new inputs.sha = spec
+        # change → immediate fetch. Polling buys nothing, keep it lazy.
+        interval: 1h
+        url: https://github.com/__USER__/__APP__
+        ref:
+          commit: << inputs.sha >>
+        provider: github
+        secretRef:
+          name: github-app-__USER__
+    - apiVersion: kustomize.toolkit.fluxcd.io/v1
+      kind: Kustomization
+      metadata:
+        name: app-preview
+        namespace: __USER__-__APP__-pr-<< inputs.id >>
+        annotations:
+          # Consumed by the notification-controller Provider+Alert below
+          # (T4): change_request keys the PR comment, commit keys the commit
+          # status, the rest enrich the message body (event metadata).
+          event.toolkit.fluxcd.io/change_request: << inputs.id | quote >>
+          event.toolkit.fluxcd.io/commit: << inputs.sha | quote >>
+          event.toolkit.fluxcd.io/preview-url: "https://__APP__-pr-<< inputs.id >>.nezam.site"
+          event.toolkit.fluxcd.io/branch: << inputs.branch | quote >>
+          event.toolkit.fluxcd.io/author: << inputs.author | quote >>
+      spec:
+        interval: 10m
+        path: ./deploy/preview
+        prune: true
+        wait: true
+        timeout: 3m
+        serviceAccountName: flux-tenant
+        targetNamespace: __USER__-__APP__-pr-<< inputs.id >>
+        sourceRef:
+          kind: GitRepository
+          name: __USER__-__APP__-pr-<< inputs.id >>
+          namespace: flux-system
+        postBuild:
+          # T2 contract: deploy/preview consumes ${PR_ID} + ${PR_SHA_SHORT};
+          # image tag pr-${PR_ID}-${PR_SHA_SHORT}. RSIP exports only the
+          # full sha — slim-sprig `trunc 7` derives the short form (matches
+          # git's default abbreviation, what the template repo's CI tags).
+          substitute:
+            PR_ID: << inputs.id | quote >>
+            PR_SHA_SHORT: << trunc 7 inputs.sha | quote >>
+    # ---- PR-comment Alert (T4), one per PR ----
+    # Lives in flux-system (providerRef must be same-namespace as the Alert, and
+    # the Provider above is in flux-system). Selects EXACTLY this PR's preview
+    # Kustomization by its own namespace + name — the notification-controller
+    # namespace match is exact-equality (no namespace wildcard), so a per-PR
+    # namespace demands a per-PR Alert. severity: info → both success and error
+    # reconcile events post/update the comment (green tick vs warning body).
+    - apiVersion: notification.toolkit.fluxcd.io/v1beta3
+      kind: Alert
+      metadata:
+        name: __USER__-__APP__-pr-<< inputs.id >>-comment
+        namespace: flux-system
+      spec:
+        providerRef:
+          name: __USER__-__APP__-pr-comment
+        eventSeverity: info
+        eventSources:
+          - kind: Kustomization
+            name: app-preview
+            namespace: __USER__-__APP__-pr-<< inputs.id >>

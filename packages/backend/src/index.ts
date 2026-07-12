@@ -16,6 +16,11 @@ backend.add(import('@backstage/plugin-proxy-backend'));
 // scaffolder plugin
 backend.add(import('@backstage/plugin-scaffolder-backend'));
 backend.add(import('@backstage/plugin-scaffolder-backend-module-github'));
+// Custom action nezam:fs:replace — literal placeholder substitution so the
+// portal reuses the __USER__/__APP__ template repo verbatim (027 T4, option C;
+// see modules/scaffolderReplace.ts for the templating rationale).
+import { scaffolderModuleNezamReplace } from './modules/scaffolderReplaceModule';
+backend.add(scaffolderModuleNezamReplace);
 
 // techdocs plugin
 backend.add(import('@backstage/plugin-techdocs-backend'));

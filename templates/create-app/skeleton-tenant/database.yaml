@@ -1,0 +1,29 @@
+# templates/tenant/database.yaml
+# DB-per-env on the shared CNPG cluster (appdb/shared-pg). The OWNER role +
+# password Secret pair are MANUAL registration steps printed by
+# scripts/register-tenant.sh (never in git; absorbed by task 019 later).
+apiVersion: postgresql.cnpg.io/v1
+kind: Database
+metadata:
+  name: __USER__-__APP__-staging
+  namespace: appdb
+  labels:
+    backstage.io/kubernetes-id: __APP__ # Backstage k8s tab (027 T3)
+spec:
+  cluster:
+    name: shared-pg
+  name: __USER_____APP___staging # postgres names use underscores
+  owner: __USER_____APP__
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Database
+metadata:
+  name: __USER__-__APP__-prod
+  namespace: appdb
+  labels:
+    backstage.io/kubernetes-id: __APP__ # Backstage k8s tab (027 T3)
+spec:
+  cluster:
+    name: shared-pg
+  name: __USER_____APP___prod
+  owner: __USER_____APP__

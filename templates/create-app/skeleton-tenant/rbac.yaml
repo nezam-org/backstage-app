@@ -1,0 +1,97 @@
+# templates/tenant/rbac.yaml
+# The tenancy TEETH: Flux applies the app's manifests impersonating this SA
+# (Kustomization.spec.serviceAccountName), so cluster-scoped resources and
+# foreign namespaces are a hard 403 — accident-proofing per the 024 trust
+# model (trusted collaborators; vcluster is the future hard wall).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: flux-tenant
+  namespace: __USER__-__APP__-staging
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: flux-tenant
+  namespace: __USER__-__APP__-prod
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: flux-tenant-admin
+  namespace: __USER__-__APP__-staging
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: admin # namespace-admin only — RoleBinding scopes it to this ns
+subjects:
+  - kind: ServiceAccount
+    name: flux-tenant
+    namespace: __USER__-__APP__-staging
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: flux-tenant-admin
+  namespace: __USER__-__APP__-prod
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: admin
+subjects:
+  - kind: ServiceAccount
+    name: flux-tenant
+    namespace: __USER__-__APP__-prod
+---
+# Gateway API CRDs ship NO aggregation into the built-in `admin` role, so the
+# RoleBindings above do not cover HTTPRoutes — yet the app-repo contract
+# REQUIRES tenants to ship one (T7 discovery). Grant exactly httproutes, to
+# exactly flux-tenant, in exactly this tenant's namespaces. Namespaced Role,
+# not a ClusterRole: no effect outside the tenant fence.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: httproute-manager
+  namespace: __USER__-__APP__-staging
+rules:
+  - apiGroups: ["gateway.networking.k8s.io"]
+    resources: ["httproutes"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: httproute-manager
+  namespace: __USER__-__APP__-prod
+rules:
+  - apiGroups: ["gateway.networking.k8s.io"]
+    resources: ["httproutes"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: flux-tenant-httproutes
+  namespace: __USER__-__APP__-staging
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: httproute-manager
+subjects:
+  - kind: ServiceAccount
+    name: flux-tenant
+    namespace: __USER__-__APP__-staging
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: flux-tenant-httproutes
+  namespace: __USER__-__APP__-prod
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: httproute-manager
+subjects:
+  - kind: ServiceAccount
+    name: flux-tenant
+    namespace: __USER__-__APP__-prod

@@ -1,0 +1,218 @@
+apiVersion: scaffolder.backstage.io/v1beta3
+kind: Template
+metadata:
+  name: create-app
+  title: Create an app on the Nezam platform
+  description: >-
+    Scaffold a FastAPI + React app from the platform template, create the repo
+    in YOUR GitHub account, and open a pull request onto the platform repo that
+    registers the tenant (staging + prod envs, DB, network fence, GitOps sync).
+    The owner merges that PR to approve you.
+  tags:
+    - fastapi
+    - react
+    - recommended
+spec:
+  owner: ma-shaaban
+  type: service
+
+  # ---------------------------------------------------------------------------
+  # FORM
+  # ---------------------------------------------------------------------------
+  parameters:
+    - title: Your app
+      required:
+        - appName
+        - description
+      properties:
+        appName:
+          title: App name
+          type: string
+          description: >-
+            Lowercase letters, numbers and dashes only. Becomes the repo name,
+            the hostnames (<app>-staging.nezam.site / <app>.nezam.site) and the
+            tenant namespaces. Keep it short — the derived Postgres role
+            (<user>_<app>) must stay under 55 chars.
+          # Mirror the register-tenant.sh constraint: ^[a-z0-9-]+$.
+          pattern: '^[a-z0-9]([a-z0-9-]*[a-z0-9])?$'
+          maxLength: 40
+          ui:autofocus: true
+        description:
+          title: Description
+          type: string
+          description: One line describing what the app does.
+
+    - title: Repository
+      required:
+        - repoUrl
+      properties:
+        repoUrl:
+          title: Repository location
+          type: string
+          # RepoUrlPicker in "owner is fixed to the signed-in user" mode is not
+          # a thing; instead we request an OAuth token with `repo` scope at
+          # scaffold time (requestUserCredentials.additionalScopes) so the
+          # publish step can create the repo in the user's OWN account. The
+          # user picks the owner (their username) + types the repo name.
+          ui:field: RepoUrlPicker
+          ui:options:
+            allowedHosts:
+              - github.com
+            # Ask GitHub (via the sign-in OAuth app) for a user token carrying
+            # `repo` scope, JUST for this scaffold run. This pops a consent the
+            # first time — it does NOT require changing the OAuth app
+            # registration (scopes are requested per-authorization). The token
+            # is exposed to steps as ${{ secrets.USER_OAUTH_TOKEN }}.
+            requestUserCredentials:
+              secretsKey: USER_OAUTH_TOKEN
+              additionalScopes:
+                github:
+                  - repo
+
+  # ---------------------------------------------------------------------------
+  # STEPS
+  # ---------------------------------------------------------------------------
+  steps:
+    # 1. Derive the owner (the signed-in user picks their own account in the
+    #    RepoUrlPicker) — parse it back out of the chosen repoUrl so downstream
+    #    steps have a plain <owner> and <repo> to substitute.
+    #    (parseRepoUrl → { host, owner, repo })
+
+    # 2. Fetch the app template VERBATIM. fetch:plain copies bytes untouched —
+    #    it does NOT run nunjucks — so the template's literal __USER__/__APP__
+    #    placeholders survive intact (they are NOT ${{ }} nunjucks and would
+    #    otherwise be a parse hazard). Single source of truth: the template
+    #    repo, exactly as scripts/init.sh consumes it.
+    - id: fetch-app
+      name: Fetch the app template
+      action: fetch:plain
+      input:
+        url: https://github.com/ma-shaaban/template-fastapi-react/tree/main
+        targetPath: ./app
+        # Read the (public) template repo via the platform GitHub App
+        # integration; no user token needed just to READ it.
+
+    # 3. Personalise the app copy — literal substitution, the scaffolder
+    #    equivalent of scripts/init.sh's `sed __USER__→user __APP__→app`.
+    - id: personalise-app
+      name: Personalise the app (init.sh equivalent)
+      action: nezam:fs:replace
+      input:
+        globPattern: app/**/*
+        replacements:
+          # ORDER: no compound __USER_____APP__ token exists in the APP repo
+          # (that token is platform-tenant-only), so plain user/app is safe.
+          - find: __USER__
+            replaceWith: ${{ parameters.repoUrl | parseRepoUrl | pick('owner') }}
+          - find: __APP__
+            replaceWith: ${{ parameters.appName }}
+
+    # 4. Create the repo in the USER's account (model b) with the user's OAuth
+    #    token. publish:github creates + pushes; the token carries `repo`
+    #    scope from requestUserCredentials above.
+    - id: publish-app
+      name: Create your repository
+      action: publish:github
+      input:
+        repoUrl: ${{ parameters.repoUrl }}
+        description: ${{ parameters.description }}
+        defaultBranch: main
+        repoVisibility: public
+        sourcePath: ./app
+        token: ${{ secrets.USER_OAUTH_TOKEN }}
+
+    # 5. Fetch the platform tenant skeleton VERBATIM (also __USER__/__APP__/
+    #    __USER_____APP__ literal tokens). Bundled in THIS repo → read from the
+    #    scaffolder workspace, no network. Mirrors templates/tenant/ in the
+    #    platform repo 1:1 (+ the T3 backstage.io/kubernetes-id labels).
+    - id: fetch-tenant
+      name: Fetch the tenant skeleton
+      action: fetch:plain
+      input:
+        url: ./skeleton-tenant
+        targetPath: ./tenant
+
+    # 6. Stamp the tenant dir — the scaffolder equivalent of
+    #    scripts/register-tenant.sh. COMPOUND TOKEN FIRST: __USER_____APP__
+    #    must be replaced before __USER__, else __USER__ eats the leading part
+    #    of __USER_____APP__ and mangles the Postgres role (same ordering gotcha
+    #    register-tenant.sh documents). dbRole = <user>_<app> with dashes → _.
+    - id: personalise-tenant
+      name: Personalise the tenant (register-tenant.sh equivalent)
+      action: nezam:fs:replace
+      input:
+        globPattern: tenant/**/*
+        replacements:
+          - find: __USER_____APP__
+            replaceWith: ${{ (parameters.repoUrl | parseRepoUrl | pick('owner') + "-" + parameters.appName) | replace("-", "_") }}
+          - find: __USER__
+            replaceWith: ${{ parameters.repoUrl | parseRepoUrl | pick('owner') }}
+          - find: __APP__
+            replaceWith: ${{ parameters.appName }}
+
+    # 7. Open the tenant-registration PR onto the platform repo. NO token input
+    #    → the scaffolder's GithubCredentialsProvider auto-selects the GitHub
+    #    App whose installation owns nezam-org/nezam-devops-k3s, i.e. the
+    #    internal deployer-bot App (allowedInstallationOwners: [nezam-org] in
+    #    app-config → the customer-facing App is never used for platform writes;
+    #    it has no Contents:write). branchName is per-user-app to avoid clashes.
+    - id: open-tenant-pr
+      name: Open the tenant-registration PR
+      action: publish:github:pull-request
+      input:
+        repoUrl: github.com?owner=nezam-org&repo=nezam-devops-k3s
+        branchName: tenant/${{ parameters.repoUrl | parseRepoUrl | pick('owner') }}-${{ parameters.appName }}
+        title: 'tenant: add ${{ parameters.repoUrl | parseRepoUrl | pick(''owner'') }}/${{ parameters.appName }}'
+        description: |
+          ## New tenant app — merge to approve
+
+          Requested via the developer portal by
+          **@${{ parameters.repoUrl | parseRepoUrl | pick('owner') }}**.
+
+          - App repo (created in the user's account):
+            `${{ parameters.repoUrl | parseRepoUrl | pick('owner') }}/${{ parameters.appName }}`
+          - Adds `k8s/tenants/${{ parameters.repoUrl | parseRepoUrl | pick('owner') }}/${{ parameters.appName }}/`
+            (staging + prod namespaces, quota, Cilium fence, RBAC impersonation,
+            CNPG Databases, Flux GitRepositories + Kustomizations, PR-preview
+            ResourceSet).
+
+          ### Owner checklist before merge (see runbook "Register a tenant app")
+          These secrets are NOT in git and MUST exist for the app to run:
+          1. `github-app-${{ parameters.repoUrl | parseRepoUrl | pick('owner') }}` in `flux-system`
+             (the user's GitHub App installation creds — Flux source auth).
+          2. The DB role + password Secret pair and the CNPG `managed.roles`
+             entry printed by `scripts/register-tenant.sh` (run it to get the
+             exact commands + generated password).
+          3. The per-env `app-db` Secrets in the two tenant namespaces.
+
+          Merging this PR = approval + audit trail. Flux applies the tenant on
+          the next reconcile; the app deploys once its repo's CI pushes an image
+          and the DB secrets exist.
+        # The stamped tenant dir must land at k8s/tenants/<user>/<app>/ in the
+        # target repo. sourcePath picks the local subtree; targetPath places it.
+        sourcePath: ./tenant
+        targetPath: k8s/tenants/${{ parameters.repoUrl | parseRepoUrl | pick('owner') }}/${{ parameters.appName }}
+
+    # 8. Register the new app's Component in the portal catalog so it shows up
+    #    on the user's dashboard immediately (ties to T3). Reads catalog-info.yaml
+    #    from the freshly-created user repo (via the platform App integration).
+    - id: register
+      name: Register in the catalog
+      action: catalog:register
+      input:
+        repoContentsUrl: ${{ steps['publish-app'].output.repoContentsUrl }}
+        catalogInfoPath: /catalog-info.yaml
+        optional: true
+
+  # ---------------------------------------------------------------------------
+  # OUTPUT (links shown on the "run complete" page)
+  # ---------------------------------------------------------------------------
+  output:
+    links:
+      - title: Your new repository
+        url: ${{ steps['publish-app'].output.remoteUrl }}
+      - title: Tenant-registration PR (owner merges to approve)
+        url: ${{ steps['open-tenant-pr'].output.remoteUrl }}
+      - title: Open in catalog
+        icon: catalog
+        entityRef: ${{ steps['register'].output.entityRef }}

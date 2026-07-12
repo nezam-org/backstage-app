@@ -58,7 +58,43 @@ backend:
 integrations:
   github:
     - host: github.com
+      # TWO GitHub Apps on the SAME host. For any owner/repo Backstage's
+      # GithubCredentialsProvider tries EVERY app in list order and uses the
+      # FIRST that returns a token whose installation actually has access to
+      # that repo (verified in @backstage/integration
+      # SingleInstanceGithubCredentialsProvider.getAppToken: Promise.all over
+      # apps → results.find(first with accessToken); an app whose
+      # allowedInstallationOwners excludes the owner is skipped). So ORDER +
+      # allowedInstallationOwners together make selection deterministic:
+      #
+      #   1. nezam-deployer-bot (INTERNAL, listed FIRST) — org-only, Contents +
+      #      Pull-requests write on nezam-devops-k3s ONLY. allowedInstallationOwners
+      #      [nezam-org] means it is CONSULTED ONLY for nezam-org repos; for the
+      #      platform repo it is found first, so it is the identity the
+      #      scaffolder's publish:github:pull-request uses for the
+      #      tenant-registration PR (and the reader for the platform repo's
+      #      catalog files). It never touches user repos. Its creds arrive as
+      #      k8s Secret `github-app-deployer-bot` (ns backstage), populated by
+      #      the orchestrator from the owner's App — NEVER invented here.
+      #   2. nezam-platform (customer-facing, listed SECOND, unscoped) — installed
+      #      on user accounts (+ nezam-org). Handles every non-nezam-org owner:
+      #      reads private tenant repos for catalog discovery, and the sign-in
+      #      allowlist. It deliberately has NO Contents:write on the platform
+      #      repo (2026-07-12 boundary ruling); being listed after the scoped bot
+      #      guarantees it is never the chosen writer for nezam-org.
       apps:
+        # Deployer-bot FIRST so it wins the nezam-org lookup. See k8s/apps/backstage
+        # deployer-bot Secret + extraEnvVarsSecrets wiring (platform repo).
+        - appId: ${GITHUB_DEPLOYER_APP_ID}
+          clientId: ${GITHUB_DEPLOYER_APP_CLIENT_ID}
+          clientSecret: ${GITHUB_DEPLOYER_APP_CLIENT_SECRET}
+          privateKey: ${GITHUB_DEPLOYER_APP_PRIVATE_KEY}
+          webhookSecret: ${GITHUB_DEPLOYER_APP_WEBHOOK_SECRET}
+          # Consulted ONLY for nezam-org repos; skipped for every other owner
+          # (returns undefined → the platform app below handles user repos).
+          allowedInstallationOwners:
+            - nezam-org
+        # Customer-facing nezam-platform — user repos + catalog discovery.
         - appId: ${GITHUB_APP_ID}
           clientId: ${GITHUB_APP_CLIENT_ID}
           clientSecret: ${GITHUB_APP_CLIENT_SECRET}
@@ -87,8 +123,18 @@ catalog:
       target: https://github.com/ma-shaaban/hello-nezam/blob/main/catalog-info.yaml
       rules:
         - allow: [Component]
-    # Scaffolder templates are registered in T4 (027 phase 1) — intentionally
-    # empty for now.
+    # Scaffolder templates (027 T4). The "Create an app" template lives in THIS
+    # repo (nezam-org/backstage-app) under templates/create-app/. Registering it
+    # as a catalog location makes it appear on the /create page. Read via the
+    # platform GitHub App integration (public repo, but the App is the configured
+    # reader). The template's steps (fetch:plain the user-facing app template,
+    # literal placeholder substitution via nezam:fs:replace, publish:github with
+    # the user's OAuth token, then publish:github:pull-request to the platform
+    # repo via the deployer-bot App identity) are documented in the template.
+    - type: url
+      target: https://github.com/nezam-org/backstage-app/blob/main/templates/create-app/template.yaml
+      rules:
+        - allow: [Template]
 
 kubernetes:
   serviceLocatorMethod:

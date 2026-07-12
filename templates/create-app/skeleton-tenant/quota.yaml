@@ -1,0 +1,54 @@
+# templates/tenant/quota.yaml
+# Same numbers both envs to start (revisit per-app at review time). LimitRange
+# injects defaults so quota can't be dodged by omitting requests.
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: tenant-quota
+  namespace: __USER__-__APP__-staging
+spec:
+  hard:
+    requests.cpu: "500m"
+    requests.memory: 512Mi
+    limits.memory: 1Gi
+    pods: "10"
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: tenant-quota
+  namespace: __USER__-__APP__-prod
+spec:
+  hard:
+    requests.cpu: "500m"
+    requests.memory: 512Mi
+    limits.memory: 1Gi
+    pods: "10"
+---
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: tenant-defaults
+  namespace: __USER__-__APP__-staging
+spec:
+  limits:
+    - type: Container
+      default:
+        memory: 128Mi
+      defaultRequest:
+        cpu: 25m
+        memory: 64Mi
+---
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: tenant-defaults
+  namespace: __USER__-__APP__-prod
+spec:
+  limits:
+    - type: Container
+      default:
+        memory: 128Mi
+      defaultRequest:
+        cpu: 25m
+        memory: 64Mi

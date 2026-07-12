@@ -1,0 +1,19 @@
+# templates/tenant/namespaces.yaml
+# Env = namespace: <user>-<app>-staging|prod. The tenant.nezam.io labels are
+# the keying surface for platform machinery (future pull-cred distributor 028,
+# vcluster move, dashboards) — keep them even though nothing consumes them yet.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: __USER__-__APP__-staging
+  labels:
+    tenant.nezam.io/user: "__USER__"
+    tenant.nezam.io/app: "__APP__"
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: __USER__-__APP__-prod
+  labels:
+    tenant.nezam.io/user: "__USER__"
+    tenant.nezam.io/app: "__APP__"
