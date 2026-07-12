@@ -51,6 +51,9 @@ jobs:
           context: .
           file: packages/backend/Dockerfile
           push: true
+          # GHCR intermittently rejects provenance/SBOM attestation manifests
+          # with "unknown blob" — plain image manifests only.
+          provenance: false
           tags: |
             ${{ env.IMAGE }}:main-${{ steps.sha.outputs.short }}
             ${{ env.IMAGE }}:latest
