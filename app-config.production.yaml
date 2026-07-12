@@ -8,7 +8,15 @@ backend:
   # The baseUrl is what browsers/clients use to reach the backend. Same value
   # as app.baseUrl because the app-backend plugin serves the frontend.
   baseUrl: ${APP_BASE_URL}
-  listen: ':7007'
+  # Object form (not the ':7007' shorthand): app-config.yaml already declares
+  # backend.listen as an object, and Backstage's config merger requires a
+  # consistent type across merged sources — a string override throws
+  # "Invalid type in config for key 'backend.listen'". host 0.0.0.0 so the pod
+  # is reachable from the Tailscale-operator proxy (the base config's implicit
+  # default binds localhost only).
+  listen:
+    host: 0.0.0.0
+    port: 7007
 
   # Shared CNPG PostgreSQL (`backstage` database on shared-pg, created by a
   # CNPG Database CR in the platform repo). All Backstage plugins share this
