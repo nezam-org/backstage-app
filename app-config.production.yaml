@@ -1,0 +1,88 @@
+app:
+  # Should be the same as backend.baseUrl when using the `app-backend` plugin.
+  # Phase 1: tailnet URL (https://backstage.<tailnet>.ts.net), injected at
+  # deploy time from the platform repo (k8s/apps/backstage).
+  baseUrl: ${APP_BASE_URL}
+
+backend:
+  # The baseUrl is what browsers/clients use to reach the backend. Same value
+  # as app.baseUrl because the app-backend plugin serves the frontend.
+  baseUrl: ${APP_BASE_URL}
+  listen: ':7007'
+
+  # Shared CNPG PostgreSQL (`backstage` database on shared-pg, created by a
+  # CNPG Database CR in the platform repo). All Backstage plugins share this
+  # single database, divided by schema — the role only needs rights on this
+  # one database, never CREATEDB.
+  database:
+    client: pg
+    # One database, one schema per plugin (instead of one database per plugin)
+    pluginDivisionMode: schema
+    # The `backstage` database is provisioned by the platform (CNPG Database
+    # CR) — Backstage must not attempt CREATE DATABASE.
+    ensureExists: false
+    # But it may create its per-plugin schemas inside that database.
+    ensureSchemaExists: true
+    knexConfig:
+      pool:
+        # Keep the pool small: connections (not RAM) are the scarce resource
+        # on shared-pg, and ~20 plugins × pool.max adds up fast.
+        min: 0
+        max: 5
+    connection:
+      host: ${POSTGRES_HOST}
+      port: ${POSTGRES_PORT}
+      user: ${POSTGRES_USER}
+      password: ${POSTGRES_PASSWORD}
+      database: ${POSTGRES_DB}
+      ssl:
+        # CNPG cluster CA, replicated into the backstage namespace and
+        # mounted at /etc/cnpg (see platform repo k8s/apps/backstage).
+        ca:
+          $file: /etc/cnpg/ca.crt
+
+# GitHub App credentials for repo actions (scaffolder publish, catalog
+# discovery). This is the org-owned `nezam-platform` GitHub App — a DISTINCT
+# credential from the GitHub OAuth app used for user sign-in (see
+# auth.providers.github in app-config.yaml). All values are injected as env
+# vars from a Kubernetes Secret at deploy time; GITHUB_APP_PRIVATE_KEY holds
+# the full PEM (multiline env values are fine via Secret + valueFrom).
+integrations:
+  github:
+    - host: github.com
+      apps:
+        - appId: ${GITHUB_APP_ID}
+          clientId: ${GITHUB_APP_CLIENT_ID}
+          clientSecret: ${GITHUB_APP_CLIENT_SECRET}
+          privateKey: ${GITHUB_APP_PRIVATE_KEY}
+          webhookSecret: ${GITHUB_APP_WEBHOOK_SECRET}
+
+catalog:
+  # Overrides the example locations from app-config.yaml.
+  rules:
+    - allow: [Component, System, API, Resource, Location, Template]
+  locations:
+    # Sign-in allowlist: User entities maintained in the platform repo.
+    # Only usernames present here can sign in (usernameMatchingUserEntityName
+    # resolver). Read via the GitHub App integration above.
+    - type: url
+      target: https://github.com/nezam-org/nezam-devops-k3s/blob/main/k8s/portal/allowlist-users.yaml
+      rules:
+        - allow: [User, Group]
+    # Scaffolder templates are registered in T4 (027 phase 1) — intentionally
+    # empty for now.
+
+kubernetes:
+  serviceLocatorMethod:
+    type: 'multiTenant'
+  clusterLocatorMethods:
+    - type: 'config'
+      clusters:
+        # In-cluster access: with authProvider serviceAccount and no
+        # serviceAccountToken, Backstage uses the pod's mounted service
+        # account token + CA automatically (read-only ClusterRole is bound in
+        # the platform repo, T3).
+        - name: nezam-k3s
+          url: https://kubernetes.default.svc
+          authProvider: 'serviceAccount'
+          skipMetricsLookup: true
