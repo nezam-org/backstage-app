@@ -4,18 +4,15 @@
 # namespaces because SA impersonation binds THERE. Cross-ns sourceRef is a
 # DELIBERATE deviation from Flux hard-multi-tenancy (trusted collaborators —
 # see 024 context).
-# STAGING source tracks the CI-maintained `deploy` branch, NOT `main`.
-# Rationale (031): the scaffolder protects the tenant repo's `main` (1 required
-# review + enforce_admins), so the 025 CI cannot direct-push the resolved image
-# tag there. Instead the CI writes `deploy/staging` (main's tree + the built
-# image tag) to an unprotected `deploy` branch on every push to main. `main`
-# stays fully PR-gated for source; the `deploy` branch is the rendered staging
-# state Flux deploys. (First deploy waits for the first CI run to create the
-# branch.)
+# STAGING source tracks `main` (trunk-based, 031). The tenant repo's `main` is
+# protected at 1 required approval; the 025 CI does NOT direct-push — it opens a
+# short-lived PR that bumps the staging image tag, which the app owner approves
+# (auto-merge then lands it on main with [skip ci]). Flux deploys the resolved
+# tag straight off the trunk. No long-lived deploy branch.
 apiVersion: source.toolkit.fluxcd.io/v1
 kind: GitRepository
 metadata:
-  name: __USER__-__APP__-deploy
+  name: __USER__-__APP__-main
   namespace: flux-system
   labels:
     backstage.io/kubernetes-id: __APP__ # Backstage k8s tab (027 T3)
@@ -23,7 +20,7 @@ spec:
   interval: 1m
   url: https://github.com/__USER__/__APP__
   ref:
-    branch: deploy
+    branch: main
   provider: github
   secretRef:
     name: github-app-__USER__
@@ -61,7 +58,7 @@ spec:
   targetNamespace: __USER__-__APP__-staging
   sourceRef:
     kind: GitRepository
-    name: __USER__-__APP__-deploy
+    name: __USER__-__APP__-main
     namespace: flux-system
 ---
 apiVersion: kustomize.toolkit.fluxcd.io/v1

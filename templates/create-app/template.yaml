@@ -130,6 +130,16 @@ spec:
     #    user-supplied repo name — appName IS the repo name. publish:github
     #    creates + pushes; the token (secret USER_OAUTH_TOKEN, minted by the
     #    GithubRepoToken field) carries repo + workflow scope.
+    #
+    #    Trunk-based deploy (031): main is protected at 1 required approval —
+    #    publish:github's defaults (protectDefaultBranch=true,
+    #    requiredApprovingReviewCount=1) are LEFT UNSET on purpose, so main is
+    #    the owner's approval gate for the staging deploy PR. allowAutoMerge=true
+    #    sets `allow_auto_merge` on the repo so that, once the owner approves the
+    #    025 CI's short-lived image-tag-bump PR, GitHub merges it automatically
+    #    (with [skip ci]) and Flux deploys the tag off main. The companion
+    #    "Allow GitHub Actions to create pull requests" + write workflow
+    #    permission (no publish:github input exists) is set by the next step.
     - id: publish-app
       name: Create your repository
       action: publish:github
@@ -138,7 +148,25 @@ spec:
         description: ${{ parameters.description }}
         defaultBranch: main
         repoVisibility: public
+        allowAutoMerge: true
         sourcePath: ./app
+        token: ${{ secrets.USER_OAUTH_TOKEN }}
+
+    # 4b. Enable the deploy-PR automation on the just-created repo (031).
+    #     publish:github has NO input for GitHub Actions PR-creation, and this
+    #     account has "Allow GitHub Actions to create and approve pull requests"
+    #     + default workflow permissions OFF by default. Without them the 025 CI's
+    #     GITHUB_TOKEN cannot open the short-lived staging-tag-bump PR. This
+    #     custom action (nezam:github:deploy-automation) sets both via
+    #     PUT /repos/{owner}/{repo}/actions/permissions/workflow with the SAME
+    #     user token that created the repo. Runs AFTER publish-app so the repo
+    #     already exists.
+    - id: enable-deploy-automation
+      name: Enable deploy-PR automation on your repo
+      action: nezam:github:deploy-automation
+      input:
+        owner: ${{ user.entity.metadata.name }}
+        repo: ${{ parameters.appName }}
         token: ${{ secrets.USER_OAUTH_TOKEN }}
 
     # 5. Fetch the platform tenant skeleton VERBATIM (also __USER__/__APP__/
