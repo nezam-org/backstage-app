@@ -113,16 +113,9 @@ catalog:
       target: https://github.com/nezam-org/nezam-devops-k3s/blob/main/k8s/portal/allowlist-users.yaml
       rules:
         - allow: [User, Group]
-    # Demo tenant app (027 T3). Registers hello-nezam's Component from its
-    # catalog-info.yaml (private repo, read via the nezam-platform GitHub App
-    # integration above). The Component's backstage.io/kubernetes-id annotation
-    # links it to its live workloads on the Kubernetes tab. This is a MANUAL
-    # per-app entry for now — T4's scaffolder/registration will automate adding
-    # one catalog.location per tenant app at create time.
-    - type: url
-      target: https://github.com/ma-shaaban/hello-nezam/blob/main/catalog-info.yaml
-      rules:
-        - allow: [Component]
+    # (Tenant apps are no longer listed here: the scaffolder's catalog:register
+    # adds a per-app location at create time. The old manual hello-nezam entry
+    # was removed 2026-07-18 with the platform-wide app cleanup.)
     # Scaffolder templates (027 T4). The "Create an app" template lives in THIS
     # repo (nezam-org/backstage-app) under templates/create-app/. Registering it
     # as a catalog location makes it appear on the /create page. Read via the

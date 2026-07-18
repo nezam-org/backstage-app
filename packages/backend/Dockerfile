@@ -48,6 +48,12 @@ RUN python3 -m venv $VIRTUAL_ENV
 ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 RUN pip3 install mkdocs-techdocs-core==1.7.0
 
+# SOPS binary (ticket 037 / platform ADR-027): the nezam:tenant:db-provision
+# scaffolder action shells out to `sops encrypt --age ...` so tenant DB
+# secrets enter the registration PR already encrypted. Pin in step with the
+# platform's sops version (nezam-devops-k3s ADR-027).
+ADD --chmod=755 https://github.com/getsops/sops/releases/download/v3.13.2/sops-v3.13.2.linux.amd64 /usr/local/bin/sops
+
 # From here on we use the least-privileged `node` user to run the backend.
 USER node
 

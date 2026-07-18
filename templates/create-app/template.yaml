@@ -149,6 +149,13 @@ spec:
         defaultBranch: main
         repoVisibility: public
         allowAutoMerge: true
+        # 030 fix (hit live 2026-07-18): publish:github's DEFAULT
+        # protectEnforceAdmins=true makes every OWNER-authored PR permanently
+        # unmergeable on a solo repo — self-approval is banned, there is no
+        # second collaborator, and bypass is disabled. Explicitly false: the
+        # 1-approval rule still gates the BOT-authored deploy PRs (its real
+        # job), while the owner keeps the admin bypass for their own PRs.
+        protectEnforceAdmins: false
         sourcePath: ./app
         token: ${{ secrets.USER_OAUTH_TOKEN }}
 
@@ -173,12 +180,15 @@ spec:
     #    __USER_____APP__ literal tokens). Bundled in THIS repo → read from the
     #    scaffolder workspace, no network. Mirrors templates/tenant/ in the
     #    platform repo 1:1 (+ the T3 backstage.io/kubernetes-id labels).
+    #    037: the skeleton is fetched DIRECTLY into ./pr/... — everything under
+    #    ./pr lands at the platform repo ROOT in one PR (tenant dir + the
+    #    cluster.yaml managed-role edit fetched below).
     - id: fetch-tenant
       name: Fetch the tenant skeleton
       action: fetch:plain
       input:
         url: ./skeleton-tenant
-        targetPath: ./tenant
+        targetPath: ./pr/k8s/tenants/${{ user.entity.metadata.name }}/${{ parameters.appName }}
 
     # 6. Stamp the tenant dir — the scaffolder equivalent of
     #    scripts/register-tenant.sh. COMPOUND TOKEN FIRST: __USER_____APP__
@@ -189,7 +199,9 @@ spec:
       name: Personalise the tenant (register-tenant.sh equivalent)
       action: nezam:fs:replace
       input:
-        globPattern: tenant/**/*
+        # pr/**/* holds ONLY the skeleton at this point — cluster.yaml is
+        # fetched AFTER this step, so the replace can never touch it.
+        globPattern: pr/**/*
         replacements:
           - find: __USER_____APP__
             replaceWith: ${{ (user.entity.metadata.name + "-" + parameters.appName) | replace("-", "_") }}
@@ -197,6 +209,32 @@ spec:
             replaceWith: ${{ user.entity.metadata.name }}
           - find: __APP__
             replaceWith: ${{ parameters.appName }}
+
+    # 6b. Pull the CURRENT appdb cluster.yaml from the platform repo so the
+    #     db-provision action can append this tenant's managed role — the edit
+    #     rides the SAME PR as the tenant dir (037: one merged PR = app fully
+    #     registered). Read auth: credentials provider → internal bot App.
+    - id: fetch-cluster-yaml
+      name: Fetch the platform appdb cluster.yaml
+      action: fetch:plain:file
+      input:
+        url: https://github.com/nezam-org/nezam-devops-k3s/blob/main/k8s/platform/appdb/cluster.yaml
+        targetPath: ./pr/k8s/platform/appdb/cluster.yaml
+
+    # 6c. Generate the tenant DB credentials (037, enabled by ADR-027): the
+    #     password is born inside the action and leaves it ONLY sops-encrypted
+    #     (age recipient = the platform repo's .sops.yaml public key). Also
+    #     appends the managed.roles entry to the fetched cluster.yaml. After
+    #     this, NOTHING about registration is manual.
+    - id: db-provision
+      name: Provision the tenant database credentials (encrypted)
+      action: nezam:tenant:db-provision
+      input:
+        user: ${{ user.entity.metadata.name }}
+        app: ${{ parameters.appName }}
+        ageRecipient: age14w6krfhmhpdfysedvennwf63d04ffp2w9h0uap3ax02xkrz4zcmq9hsmt0
+        secretsPath: pr/k8s/tenants/${{ user.entity.metadata.name }}/${{ parameters.appName }}/secrets.sops.yaml
+        clusterYamlPath: pr/k8s/platform/appdb/cluster.yaml
 
     # 7. Open the tenant-registration PR onto the platform repo. NO token input
     #    → the scaffolder's GithubCredentialsProvider auto-selects the GitHub
@@ -222,24 +260,26 @@ spec:
           - Adds `k8s/tenants/${{ user.entity.metadata.name }}/${{ parameters.appName }}/`
             (staging + prod namespaces, quota, Cilium fence, RBAC impersonation,
             CNPG Databases, Flux GitRepositories + Kustomizations, PR-preview
-            ResourceSet).
+            ResourceSet) — **including the sops-encrypted DB secrets** (037;
+            the password was generated inside the scaffolder and exists only
+            encrypted).
+          - Appends this tenant's `managed.roles` entry to
+            `k8s/platform/appdb/cluster.yaml`.
 
-          ### Owner checklist before merge (see runbook "Register a tenant app")
-          These secrets are NOT in git and MUST exist for the app to run:
-          1. `github-app-${{ user.entity.metadata.name }}` in `flux-system`
-             (the user's GitHub App installation creds — Flux source auth).
-          2. The DB role + password Secret pair and the CNPG `managed.roles`
-             entry printed by `scripts/register-tenant.sh` (run it to get the
-             exact commands + generated password).
-          3. The per-env `app-db` Secrets in the two tenant namespaces.
+          ### Owner checklist before merge
+          1. ONLY if this is the user's FIRST app: ensure their Flux source
+             secret exists — `k8s/tenants/${{ user.entity.metadata.name }}/github-app-${{ user.entity.metadata.name }}.sops.yaml`
+             (runbook "Onboard a tenant user", declarative form).
+          2. Hostname collisions are first-come-first-served — check the app
+             repo's `deploy/` HTTPRoutes against existing tenants.
 
-          Merging this PR = approval + audit trail. Flux applies the tenant on
-          the next reconcile; the app deploys once its repo's CI pushes an image
-          and the DB secrets exist.
-        # The stamped tenant dir must land at k8s/tenants/<user>/<app>/ in the
-        # target repo. sourcePath picks the local subtree; targetPath places it.
-        sourcePath: ./tenant
-        targetPath: k8s/tenants/${{ user.entity.metadata.name }}/${{ parameters.appName }}
+          Merging this PR = approval + audit trail. After merge everything is
+          automatic except ONE approval: the app repo's CI opens a staging
+          deploy PR — approve it and the app goes LIVE at
+          https://${{ parameters.appName }}-staging.nezam.site
+        # Everything under ./pr lands at the platform repo ROOT: the tenant
+        # dir AND the cluster.yaml managed-role edit, one atomic PR (037).
+        sourcePath: ./pr
 
     # 8. Register the new app's Component in the portal catalog so it shows up
     #    on the user's dashboard immediately (ties to T3). Reads catalog-info.yaml
@@ -261,6 +301,8 @@ spec:
         url: ${{ steps['publish-app'].output.remoteUrl }}
       - title: Tenant-registration PR (owner merges to approve)
         url: ${{ steps['open-tenant-pr'].output.remoteUrl }}
+      - title: Your app URL (staging — live after PR merge + deploy-PR approval)
+        url: https://${{ parameters.appName }}-staging.nezam.site
       - title: Open in catalog
         icon: catalog
         entityRef: ${{ steps['register'].output.entityRef }}

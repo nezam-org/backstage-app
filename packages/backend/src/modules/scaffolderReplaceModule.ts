@@ -13,6 +13,7 @@ import { scaffolderActionsExtensionPoint } from '@backstage/plugin-scaffolder-no
 import { createReplaceAction } from './scaffolderReplace';
 import { createAssertMaxLengthAction } from './scaffolderAssert';
 import { createDeployAutomationAction } from './scaffolderDeployAutomation';
+import { createDbProvisionAction } from './scaffolderDbProvision';
 
 export const scaffolderModuleNezamReplace = createBackendModule({
   pluginId: 'scaffolder',
@@ -25,6 +26,7 @@ export const scaffolderModuleNezamReplace = createBackendModule({
           createReplaceAction(),
           createAssertMaxLengthAction(),
           createDeployAutomationAction(),
+          createDbProvisionAction(),
         );
       },
     });
