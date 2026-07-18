@@ -5,9 +5,9 @@ metadata:
   title: Create an app on the Nezam platform
   description: >-
     Scaffold a FastAPI + React app from the platform template, create the repo
-    in YOUR GitHub account, and open a pull request onto the platform repo that
-    registers the tenant (staging + prod envs, DB, network fence, GitOps sync).
-    The owner merges that PR to approve you.
+    in YOUR GitHub account, and register it on the platform (staging + prod
+    envs, DB, network fence, GitOps sync) — fully automatic; your app is live
+    on its staging URL a few minutes after this form.
   tags:
     - fastapi
     - react
@@ -156,6 +156,15 @@ spec:
         # 1-approval rule still gates the BOT-authored deploy PRs (its real
         # job), while the owner keeps the admin bypass for their own PRs.
         protectEnforceAdmins: false
+        # ── GATE SUSPENDED (ADR-028, owner ruling 2026-07-18: UX > security
+        # for now) ── main used to be branch-protected (1 required approval),
+        # which made the owner's approval the staging-release gate (ADR-025).
+        # Suspended: repos are created UNPROTECTED and the template CI merges
+        # its own deploy PR immediately (see template-fastapi-react ci.yaml,
+        # same ADR). TO RESTORE THE GATE: delete this line (publish:github's
+        # default protectDefaultBranch=true returns) AND revert the ci.yaml
+        # merge step to `--auto --squash`.
+        protectDefaultBranch: false
         sourcePath: ./app
         token: ${{ secrets.USER_OAUTH_TOKEN }}
 
@@ -250,10 +259,13 @@ spec:
         branchName: tenant/${{ user.entity.metadata.name }}-${{ parameters.appName }}
         title: 'tenant: add ${{ user.entity.metadata.name }}/${{ parameters.appName }}'
         description: |
-          ## New tenant app — merge to approve
+          ## New tenant app — audit trail (auto-merged, ADR-028)
 
           Requested via the developer portal by
-          **@${{ user.entity.metadata.name }}**.
+          **@${{ user.entity.metadata.name }}**. This PR is merged
+          automatically by the platform bot — the human approval gate is
+          SUSPENDED (owner ruling 2026-07-18, ADR-028); this PR exists as the
+          registration audit trail.
 
           - App repo (created in the user's account):
             `${{ user.entity.metadata.name }}/${{ parameters.appName }}`
@@ -266,20 +278,34 @@ spec:
           - Appends this tenant's `managed.roles` entry to
             `k8s/platform/appdb/cluster.yaml`.
 
-          ### Owner checklist before merge
-          1. ONLY if this is the user's FIRST app: ensure their Flux source
-             secret exists — `k8s/tenants/${{ user.entity.metadata.name }}/github-app-${{ user.entity.metadata.name }}.sops.yaml`
-             (runbook "Onboard a tenant user", declarative form).
-          2. Hostname collisions are first-come-first-served — check the app
-             repo's `deploy/` HTTPRoutes against existing tenants.
+          ### Notes for the owner (nothing to do — informational)
+          - If this is the user's FIRST app their Flux source secret
+            (`k8s/tenants/${{ user.entity.metadata.name }}/github-app-${{ user.entity.metadata.name }}.sops.yaml`)
+            must already exist, else the tenant GitRepositories sit NotReady
+            until it does (runbook "Onboard a tenant user").
+          - Hostname claims are first-come-first-served and NO LONGER human
+            reviewed (gate suspended) — collisions surface as HTTPRoute
+            conflicts.
 
-          Merging this PR = approval + audit trail. After merge everything is
-          automatic except ONE approval: the app repo's CI opens a staging
-          deploy PR — approve it and the app goes LIVE at
+          The app goes LIVE with no further action at
           https://${{ parameters.appName }}-staging.nezam.site
         # Everything under ./pr lands at the platform repo ROOT: the tenant
         # dir AND the cluster.yaml managed-role edit, one atomic PR (037).
         sourcePath: ./pr
+
+    # 7b. ── GATE SUSPENDED (ADR-028, owner ruling 2026-07-18: UX > security
+    #     for now) ── The tenant PR used to WAIT here for the platform owner's
+    #     manual merge (approval + audit). Now the bot merges it immediately;
+    #     the PR remains in history as the audit trail. TO RESTORE THE GATE:
+    #     delete this step and revert the description wording above to
+    #     "merge to approve".
+    - id: merge-tenant-pr
+      name: Register on the platform (auto-merge, ADR-028)
+      action: nezam:github:merge-pr
+      input:
+        owner: nezam-org
+        repo: nezam-devops-k3s
+        pullNumber: ${{ steps['open-tenant-pr'].output.pullRequestNumber }}
 
     # 8. Register the new app's Component in the portal catalog so it shows up
     #    on the user's dashboard immediately (ties to T3). Reads catalog-info.yaml
@@ -299,9 +325,9 @@ spec:
     links:
       - title: Your new repository
         url: ${{ steps['publish-app'].output.remoteUrl }}
-      - title: Tenant-registration PR (owner merges to approve)
+      - title: Tenant-registration PR (audit trail — auto-merged, ADR-028)
         url: ${{ steps['open-tenant-pr'].output.remoteUrl }}
-      - title: Your app URL (staging — live after PR merge + deploy-PR approval)
+      - title: Your app URL (staging — live in a few minutes, no action needed)
         url: https://${{ parameters.appName }}-staging.nezam.site
       - title: Open in catalog
         icon: catalog
