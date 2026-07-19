@@ -1,0 +1,209 @@
+apiVersion: scaffolder.backstage.io/v1beta3
+kind: Template
+metadata:
+  name: close-app
+  title: Close an app on the Nezam platform
+  description: >-
+    Offboard an app you own: deprovision it from the platform (namespaces,
+    GitOps sync, network fence, preview envs, catalog entry) and archive or
+    delete YOUR GitHub repository. Databases are RETAINED unless you opt in
+    to dropping them. Symmetric counterpart of create-app.
+  tags:
+    - offboard
+spec:
+  owner: ma-shaaban
+  type: service
+
+  parameters:
+    - title: Close an app
+      required:
+        - app
+        - repoAction
+        - confirmName
+      properties:
+        app:
+          title: App
+          type: string
+          ui:field: OwnedAppPicker
+        repoAction:
+          title: Your GitHub repository
+          type: string
+          default: archive
+          enum: [archive, delete]
+          enumNames:
+            - 'Archive (read-only, reversible — recommended)'
+            - 'Delete permanently (cannot be undone)'
+          ui:widget: radio
+        dropDb:
+          title: Also DROP the app's databases (staging + prod data is destroyed)
+          description: >-
+            OFF (default): databases and data stay on the shared Postgres for
+            manual recovery/export (see runbook "Close an app"). Note the
+            platform's B2 backup archive retains dropped data ~14 days.
+          type: boolean
+          default: false
+        confirmName:
+          title: Type the app name to confirm
+          description: This is the destructive-action gate. Must match exactly.
+          type: string
+        githubToken:
+          title: GitHub access
+          type: string
+          ui:field: GithubCloseToken
+
+  steps:
+    # 0. THE gate (ADR-028: everything past this is zero-touch).
+    - id: confirm
+      name: Typed-name confirmation
+      action: nezam:assert:equals
+      input:
+        value: ${{ parameters.confirmName }}
+        expected: ${{ parameters.app }}
+        message: >-
+          The confirmation does not match the app name. Nothing was changed.
+
+    # 1. Enumerate the platform files to remove. Rooted at the SIGNED-IN
+    #    user → structurally impossible to close someone else's tenant.
+    - id: remove-plan
+      name: Plan the platform removal
+      action: nezam:tenant:remove-plan
+      input:
+        user: ${{ user.entity.metadata.name }}
+        app: ${{ parameters.app }}
+
+    # 2. Fetch the CURRENT cluster.yaml (same fetch as create's 6b) so the
+    #    managed-role edit rides the removal PR.
+    - id: fetch-cluster-yaml
+      name: Fetch the platform appdb cluster.yaml
+      action: fetch:plain:file
+      input:
+        url: https://github.com/nezam-org/nezam-devops-k3s/blob/main/k8s/platform/appdb/cluster.yaml
+        targetPath: ./pr/k8s/platform/appdb/cluster.yaml
+
+    # ---- DB-DROP PHASE 1 (only when dropDb) ------------------------------
+    # Flux GC deletes with the LIVE spec → databaseReclaimPolicy=delete must
+    # be applied BEFORE the Database CRs are removed. One commit cannot do
+    # both (verified CNPG devel docs + the 2026-07-18 prune-trap lesson).
+    # alreadyRemoved guard: a RE-RUN after the removal PR merged (crash
+    # between merge-removal-pr and unregister/repo-close) would 404 this
+    # fetch — database.yaml is gone from main. remove-plan runs first and
+    # reports it; wait-reclaim tolerates 404 CRs, so the re-run completes.
+    - id: fetch-database-yaml
+      if: ${{ parameters.dropDb and not steps['remove-plan'].output.alreadyRemoved }}
+      name: Fetch the tenant database.yaml (drop phase 1)
+      action: fetch:plain:file
+      input:
+        url: https://github.com/nezam-org/nezam-devops-k3s/blob/main/k8s/tenants/${{ user.entity.metadata.name }}/${{ parameters.app }}/database.yaml
+        targetPath: ./prep/k8s/tenants/${{ user.entity.metadata.name }}/${{ parameters.app }}/database.yaml
+    - id: drop-prepare
+      if: ${{ parameters.dropDb and not steps['remove-plan'].output.alreadyRemoved }}
+      name: Set databaseReclaimPolicy=delete (drop phase 1)
+      action: nezam:tenant:db-drop-prepare
+      input:
+        databaseYamlPath: prep/k8s/tenants/${{ user.entity.metadata.name }}/${{ parameters.app }}/database.yaml
+    - id: open-prepare-pr
+      if: ${{ parameters.dropDb and steps['drop-prepare'].output.changed }}
+      name: Open the drop-prepare PR (bot)
+      action: publish:github:pull-request
+      input:
+        repoUrl: github.com?owner=nezam-org&repo=nezam-devops-k3s
+        branchName: close/${{ user.entity.metadata.name }}-${{ parameters.app }}-prepare
+        title: 'close(prep): ${{ user.entity.metadata.name }}/${{ parameters.app }} — reclaimPolicy=delete'
+        description: >-
+          Phase 1 of the DB-drop close (032): flip the live Database CRs to
+          databaseReclaimPolicy=delete BEFORE removal. Auto-merged (ADR-028;
+          the typed-name confirmation is the gate).
+        sourcePath: ./prep
+        createWhenEmpty: false
+        # A failed merge leaves the PR OPEN (merge-pr's documented behavior);
+        # without update:true the re-run would throw "Pull request already
+        # exists". With it, the open PR is updated in place.
+        update: true
+    - id: merge-prepare-pr
+      if: ${{ parameters.dropDb and steps['open-prepare-pr'].output.pullRequestNumber }}
+      name: Merge the drop-prepare PR
+      action: nezam:github:merge-pr
+      input:
+        owner: nezam-org
+        repo: nezam-devops-k3s
+        pullNumber: ${{ steps['open-prepare-pr'].output.pullRequestNumber }}
+    - id: wait-reclaim
+      if: ${{ parameters.dropDb }}
+      name: Wait for Flux to apply the reclaim policy
+      action: nezam:k8s:wait-db-reclaim
+      input:
+        user: ${{ user.entity.metadata.name }}
+        app: ${{ parameters.app }}
+
+    # ---- REMOVAL PR (always) ---------------------------------------------
+    - id: db-deprovision
+      name: Deregister the DB role (inverse of 037)
+      action: nezam:tenant:db-deprovision
+      input:
+        user: ${{ user.entity.metadata.name }}
+        app: ${{ parameters.app }}
+        drop: ${{ parameters.dropDb }}
+        clusterYamlPath: pr/k8s/platform/appdb/cluster.yaml
+    - id: open-removal-pr
+      name: Open the tenant-removal PR (bot)
+      action: publish:github:pull-request
+      input:
+        repoUrl: github.com?owner=nezam-org&repo=nezam-devops-k3s
+        branchName: close/${{ user.entity.metadata.name }}-${{ parameters.app }}
+        title: 'close: remove ${{ user.entity.metadata.name }}/${{ parameters.app }}'
+        description: |
+          ## Close-app — audit trail (auto-merged, ADR-028)
+
+          Requested via the portal by **@${{ user.entity.metadata.name }}**
+          (typed-name confirmed). Removes
+          `k8s/tenants/${{ user.entity.metadata.name }}/${{ parameters.app }}/`
+          — Flux `prune: true` reaps namespaces, Flux sources/Kustomizations,
+          netpol/quota/rbac, sops Secrets, the preview ResourceSet (live
+          preview envs are garbage-collected by flux-operator), and the KEDA
+          scale-to-zero objects (033) that live in the tenant dir — the staging
+          InterceptorRoute + ScaledObject in the tenant staging ns and the
+          per-tenant ReferenceGrant in ns `keda` — so they are reaped with the
+          rest of the tenant tree. Also edits
+          `k8s/platform/appdb/cluster.yaml`
+          (drop=${{ parameters.dropDb }}: false → role entry removed, DBs +
+          role RETAINED in Postgres; true → role → ensure:absent, DBs dropped
+          via reclaimPolicy=delete applied in the prepare PR).
+        sourcePath: ./pr
+        filesToDelete: ${{ steps['remove-plan'].output.filesToDelete }}
+        createWhenEmpty: false
+        update: true # re-run with a leftover OPEN close PR: update, not throw
+    - id: merge-removal-pr
+      if: ${{ steps['open-removal-pr'].output.pullRequestNumber }}
+      name: Deprovision from the platform (auto-merge, ADR-028)
+      action: nezam:github:merge-pr
+      input:
+        owner: nezam-org
+        repo: nezam-devops-k3s
+        pullNumber: ${{ steps['open-removal-pr'].output.pullRequestNumber }}
+
+    # 3. Catalog unregister (the 07-18 ghost-entry fix) — API path, ownership
+    #    guarded, idempotent.
+    - id: unregister
+      name: Remove from the portal catalog
+      action: nezam:catalog:unregister
+      input:
+        app: ${{ parameters.app }}
+        expectedOwner: ${{ user.entity.metadata.name }}
+
+    # 4. LAST: the user's repo (their property, their token — ADR-026).
+    #    Ordered last so a platform-side failure never strands a deleted repo.
+    - id: repo-close
+      name: Archive or delete your repository
+      action: nezam:github:repo-close
+      input:
+        owner: ${{ user.entity.metadata.name }}
+        repo: ${{ parameters.app }}
+        mode: ${{ parameters.repoAction }}
+        token: ${{ secrets.USER_OAUTH_TOKEN }}
+
+  output:
+    links:
+      - title: Removal PR (audit trail — auto-merged)
+        url: ${{ steps['open-removal-pr'].output.remoteUrl }}
+      - title: 'Optional: delete the ghcr.io container image (manual — see runbook)'
+        url: https://github.com/users/${{ user.entity.metadata.name }}/packages/container/${{ parameters.app }}/settings

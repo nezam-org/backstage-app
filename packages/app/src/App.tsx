@@ -12,6 +12,8 @@ import {
 import { ScaffolderPage, scaffolderPlugin } from '@backstage/plugin-scaffolder';
 import { ScaffolderFieldExtensions } from '@backstage/plugin-scaffolder-react';
 import { GithubRepoTokenFieldExtension } from './scaffolder/GithubRepoTokenField';
+import { OwnedAppPickerExtension } from './scaffolder/OwnedAppPicker';
+import { GithubCloseTokenFieldExtension } from './scaffolder/GithubCloseTokenField';
 import { orgPlugin } from '@backstage/plugin-org';
 import { SearchPage } from '@backstage/plugin-search';
 import {
@@ -96,6 +98,8 @@ const routes = (
     <Route path="/create" element={<ScaffolderPage />}>
       <ScaffolderFieldExtensions>
         <GithubRepoTokenFieldExtension />
+        <OwnedAppPickerExtension />
+        <GithubCloseTokenFieldExtension />
       </ScaffolderFieldExtensions>
     </Route>
     <Route path="/api-docs" element={<ApiExplorerPage />} />
