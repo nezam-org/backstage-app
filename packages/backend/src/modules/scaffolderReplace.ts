@@ -48,7 +48,17 @@ export const createReplaceAction = () =>
                 find: z.string().describe('literal token to find'),
                 replaceWith: z
                   .string()
+                  .optional()
                   .describe('literal string to substitute'),
+                replaceWithFile: z
+                  .string()
+                  .optional()
+                  .describe(
+                    'workspace-relative file whose TRIMMED content is the ' +
+                      'substitute (036: the template VERSION file → the ' +
+                      'catalog-info template-version annotation); set ' +
+                      'exactly one of replaceWith / replaceWithFile',
+                  ),
               }),
             )
             .describe(
@@ -74,6 +84,33 @@ export const createReplaceAction = () =>
     async handler(ctx) {
       const { replacements, globPattern } = ctx.input;
 
+      // Resolve file-sourced replacement values ONCE up front (036: the
+      // template repo's VERSION file, fetched into the workspace by
+      // fetch:plain, becomes the nezam.space/template-version value — so the
+      // portal never needs a redeploy when the template cuts a release).
+      const resolved: { find: string; replaceWith: string }[] = [];
+      for (const r of replacements) {
+        if ((r.replaceWith === undefined) === (r.replaceWithFile === undefined)) {
+          throw new Error(
+            `nezam:fs:replace — replacement for "${r.find}" must set exactly ` +
+              `one of replaceWith / replaceWithFile`,
+          );
+        }
+        if (r.replaceWithFile !== undefined) {
+          const absSource = resolveSafeChildPath(
+            ctx.workspacePath,
+            r.replaceWithFile,
+          );
+          // trim: the file ends with a newline; the annotation value must not.
+          resolved.push({
+            find: r.find,
+            replaceWith: (await readFile(absSource)).toString('utf8').trim(),
+          });
+        } else {
+          resolved.push({ find: r.find, replaceWith: r.replaceWith! });
+        }
+      }
+
       const matches = await glob(globPattern ?? '**/*', {
         cwd: ctx.workspacePath,
         nodir: true,
@@ -91,7 +128,7 @@ export const createReplaceAction = () =>
         }
         const original = buf.toString('utf8');
         let next = original;
-        for (const { find, replaceWith } of replacements) {
+        for (const { find, replaceWith } of resolved) {
           next = next.replace(new RegExp(escapeRegExp(find), 'g'), replaceWith);
         }
         if (next !== original) {
