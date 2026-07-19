@@ -128,6 +128,13 @@ catalog:
       target: https://github.com/nezam-org/backstage-app/blob/main/templates/create-app/template.yaml
       rules:
         - allow: [Template]
+    # The symmetric "Close an app" offboard template (032). Same repo, same
+    # bot-App reader; its steps deprovision the tenant (bot-authored removal PR,
+    # auto-merged) and archive/delete the user's own repo.
+    - type: url
+      target: https://github.com/nezam-org/backstage-app/blob/main/templates/close-app/template.yaml
+      rules:
+        - allow: [Template]
 
 kubernetes:
   serviceLocatorMethod:
