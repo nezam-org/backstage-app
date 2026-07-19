@@ -9,6 +9,7 @@ resources:
   - database.yaml
   - sync.yaml
   - preview.yaml
+  - keda.yaml
   # 037: written by the nezam:tenant:db-provision scaffolder step (encrypted;
   # decrypted by the platform's `tenants` Flux Kustomization, ADR-027).
   - secrets.sops.yaml

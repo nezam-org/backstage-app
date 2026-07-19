@@ -60,6 +60,42 @@ spec:
     kind: GitRepository
     name: __USER__-__APP__-main
     namespace: flux-system
+  # 033: staging rides the KEDA interceptor — two rendered-manifest rewrites,
+  # platform-side (ADR-026: the tenant repo stays vanilla/portable; deployed
+  # standalone elsewhere these patches simply don't exist):
+  #  1. HTTPRoute backendRef → interceptor proxy Service (ns keda; the
+  #     per-tenant ReferenceGrant in keda.yaml permits the cross-ns ref).
+  #     Envoy preserves the Host header, which is what the interceptor routes
+  #     on (InterceptorRoute hosts). CR patch = json-merge semantics: the
+  #     rules LIST is replaced wholesale — deterministic; hostnames untouched.
+  #  2. Strip spec.replicas so Flux SSA doesn't fight the autoscaler (Flux
+  #     FAQ: omit replicas under HPA). SMP null-delete — tolerant of the
+  #     field being already absent in a diverged tenant repo.
+  patches:
+    - target:
+        kind: HTTPRoute
+        name: __APP__
+      patch: |-
+        apiVersion: gateway.networking.k8s.io/v1
+        kind: HTTPRoute
+        metadata:
+          name: __APP__
+        spec:
+          rules:
+            - backendRefs:
+                - name: keda-add-ons-http-interceptor-proxy
+                  namespace: keda
+                  port: 8080
+    - target:
+        kind: Deployment
+        name: __APP__
+      patch: |-
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: __APP__
+        spec:
+          replicas: null
 ---
 apiVersion: kustomize.toolkit.fluxcd.io/v1
 kind: Kustomization

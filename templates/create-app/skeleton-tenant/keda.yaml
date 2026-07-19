@@ -1,0 +1,71 @@
+# templates/tenant/keda.yaml
+# 033 scale-to-zero — STAGING ONLY (prod always-on pending owner call).
+# Platform-side by design (ADR-026): tenant repo deploy/ stays vanilla; the
+# takeover happens via sync.yaml's app-staging patches (route → interceptor,
+# replicas stripped). Three objects:
+#   ReferenceGrant  (ns keda)     — permits the tenant staging HTTPRoute's
+#                                   cross-ns backendRef to the interceptor
+#                                   proxy Service. Gateway API v1beta1; one
+#                                   grant per tenant (from.namespace is exact).
+#   InterceptorRoute (staging ns) — routing table entry: Host header →
+#                                   target Service. http.keda.sh/v1beta1 —
+#                                   HTTPScaledObject v1alpha1 is DEPRECATED
+#                                   at add-on 0.15, do not use it.
+#   ScaledObject     (staging ns) — the scaling half (0.15 split): workload
+#                                   ref + min/max + cooldown, external-push
+#                                   trigger against the add-on scaler.
+apiVersion: gateway.networking.k8s.io/v1beta1
+kind: ReferenceGrant
+metadata:
+  name: __USER__-__APP__-staging-to-interceptor
+  namespace: keda
+spec:
+  from:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      namespace: __USER__-__APP__-staging
+  to:
+    - group: ""
+      kind: Service
+      name: keda-add-ons-http-interceptor-proxy
+---
+apiVersion: http.keda.sh/v1beta1
+kind: InterceptorRoute
+metadata:
+  name: __APP__
+  namespace: __USER__-__APP__-staging
+  labels:
+    backstage.io/kubernetes-id: __APP__ # Backstage k8s tab (027 T3)
+spec:
+  target:
+    service: __APP__
+    port: 80
+  rules:
+    - hosts:
+        - __APP__-staging.nezam.site # must equal the Host header Envoy forwards
+  scalingMetric:
+    concurrency:
+      targetValue: 100 # required at 0.15 (no default); 1 pod easily holds 100 concurrent — staging never needs >1
+  timeouts:
+    readiness: 60s # bound the cold-start wait (default disabled = hold forever on a crashlooping app); 60s tolerates a first-time image pull
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: __APP__
+  namespace: __USER__-__APP__-staging
+  labels:
+    backstage.io/kubernetes-id: __APP__ # Backstage k8s tab (027 T3)
+spec:
+  scaleTargetRef:
+    name: __APP__
+    kind: Deployment
+    apiVersion: apps/v1
+  minReplicaCount: 0 # the whole point
+  maxReplicaCount: 1 # staging: one pod max (quota-friendly; rolling-update surge is Deployment-level, unaffected)
+  cooldownPeriod: 300 # idle window 5min: snappy demo, no churn during active dev (CI deploys don't wake pods — a template change at 0 replicas materialises on next request)
+  triggers:
+    - type: external-push
+      metadata:
+        scalerAddress: "keda-add-ons-http-external-scaler.keda:9090"
+        interceptorRoute: "__APP__" # resolved in this namespace

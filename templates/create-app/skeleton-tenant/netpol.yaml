@@ -26,6 +26,13 @@ spec:
         - remote-node # cross-node: the OTHER node's Envoy → pod (ingress identity doesn't survive the hop)
     - fromEndpoints:
         - {}
+    # 033: interceptor→app — staging traffic arrives from the KEDA interceptor
+    # pod (ns keda), not the Gateway; ingress/remote-node entities do NOT cover
+    # pod-to-pod. Prod has no such rule (always-on, direct route).
+    - fromEndpoints:
+        - matchLabels:
+            io.kubernetes.pod.namespace: keda
+            app.kubernetes.io/component: interceptor
   egress:
     - toEndpoints:
         - matchLabels:
