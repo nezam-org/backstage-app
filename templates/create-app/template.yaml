@@ -104,7 +104,7 @@ spec:
       name: Fetch the app template
       action: fetch:plain
       input:
-        url: https://github.com/ma-shaaban/template-fastapi-react/tree/main
+        url: https://github.com/nezam-org/template-fastapi-react/tree/main
         targetPath: ./app
         # Read the (public) template repo via the platform GitHub App
         # integration; no user token needed just to READ it.

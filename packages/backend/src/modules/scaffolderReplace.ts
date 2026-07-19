@@ -2,7 +2,7 @@
  * Custom scaffolder action: nezam:fs:replace
  *
  * Why this exists (027 T4 templating decision — option C):
- * The scaffold template (ma-shaaban/template-fastapi-react) is the SINGLE
+ * The scaffold template (nezam-org/template-fastapi-react) is the SINGLE
  * source of truth for a new app. It personalises itself with LITERAL
  * placeholders __USER__ / __APP__ substituted by `sed` in its scripts/init.sh
  * — NOT with Backstage's nunjucks `${{ }}` syntax. The scaffolder's
