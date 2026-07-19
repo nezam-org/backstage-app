@@ -123,6 +123,23 @@ spec:
             replaceWith: ${{ user.entity.metadata.name }}
           - find: __APP__
             replaceWith: ${{ parameters.appName }}
+          # 036: stamp the template version into catalog-info.yaml's
+          # nezam.space/template-version annotation. The value is the template
+          # repo's VERSION file, which fetch-app copied into the workspace —
+          # replaceWithFile reads + trims it at run time, so template releases
+          # need NO portal redeploy.
+          - find: __TEMPLATE_VERSION__
+            replaceWithFile: app/VERSION
+
+    # 3b. Drop the VERSION marker — the catalog-info annotation is the app's
+    #     only template-version record (owner ruling, 036). fs:delete is a
+    #     Backstage built-in; runs AFTER personalise-app (which reads the file).
+    - id: drop-version-marker
+      name: Drop the template VERSION marker
+      action: fs:delete
+      input:
+        files:
+          - app/VERSION
 
     # 4. Create the repo in the USER's account with the user's OAuth token.
     #    The publish target is built HERE from the single appName + the derived
