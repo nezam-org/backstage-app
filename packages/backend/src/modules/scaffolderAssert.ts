@@ -69,3 +69,39 @@ export const createAssertMaxLengthAction = () =>
       ctx.output('length', value.length);
     },
   });
+
+/*
+ * Custom scaffolder action: nezam:assert:equals (032 — close-app gate)
+ *
+ * The close-app template's typed-app-name confirmation IS the destructive-flow
+ * gate (ADR-028: everything after it is zero-touch). This action throws unless
+ * the value the user typed equals the exact required value (the app name),
+ * asserted SERVER-side as the first step so a wrong confirm changes nothing.
+ */
+export const createAssertEqualsAction = () =>
+  createTemplateAction({
+    id: 'nezam:assert:equals',
+    description:
+      'Fail the scaffold unless `value` equals `expected`. Close-app uses ' +
+      'this as the typed-app-name confirmation — THE destructive-flow gate ' +
+      '(ADR-028: everything after it is zero-touch).',
+    schema: {
+      input: {
+        value: z => z.string().describe('what the user typed'),
+        expected: z => z.string().describe('the exact required value'),
+        message: z => z.string().optional(),
+      },
+      output: {},
+    },
+    async handler(ctx) {
+      const { value, expected, message } = ctx.input;
+      if (value !== expected) {
+        throw new Error(
+          message ??
+            `Confirmation "${value}" does not match "${expected}" — type ` +
+              `the app name exactly to confirm. Nothing was changed.`,
+        );
+      }
+      ctx.logger.info('nezam:assert:equals — confirmation OK');
+    },
+  });
