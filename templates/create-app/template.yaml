@@ -131,15 +131,18 @@ spec:
           - find: __TEMPLATE_VERSION__
             replaceWithFile: app/VERSION
 
-    # 3b. Drop the VERSION marker — the catalog-info annotation is the app's
-    #     only template-version record (owner ruling, 036). fs:delete is a
-    #     Backstage built-in; runs AFTER personalise-app (which reads the file).
+    # 3b. Drop the template-repo-only files — the catalog-info annotation is
+    #     the app's only template-version record (owner ruling, 036), and
+    #     TEMPLATE.md is maintainer documentation that must not ship to apps
+    #     (044, template v1.2.0). fs:delete is a Backstage built-in; runs
+    #     AFTER personalise-app (which reads VERSION).
     - id: drop-version-marker
-      name: Drop the template VERSION marker
+      name: Drop the template-repo-only files
       action: fs:delete
       input:
         files:
           - app/VERSION
+          - app/TEMPLATE.md
 
     # 4. Create the repo in the USER's account with the user's OAuth token.
     #    The publish target is built HERE from the single appName + the derived
