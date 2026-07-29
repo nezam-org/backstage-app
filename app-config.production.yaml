@@ -135,6 +135,16 @@ catalog:
       target: https://github.com/nezam-org/backstage-app/blob/main/templates/close-app/template.yaml
       rules:
         - allow: [Template]
+    # Dev environments (050): request/close a personal cloud workspace — no
+    # user repo, no DB; manifests land platform-side via bot PR, Flux delivers.
+    - type: url
+      target: https://github.com/nezam-org/backstage-app/blob/main/templates/create-devenv/template.yaml
+      rules:
+        - allow: [Template]
+    - type: url
+      target: https://github.com/nezam-org/backstage-app/blob/main/templates/close-devenv/template.yaml
+      rules:
+        - allow: [Template]
 
 kubernetes:
   serviceLocatorMethod:

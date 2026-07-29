@@ -41,6 +41,11 @@ import {
 import { createWaitDbReclaimAction } from './scaffolderWaitDbReclaim';
 import { createCatalogUnregisterAction } from './scaffolderCatalogUnregister';
 import { createRepoCloseAction } from './scaffolderRepoClose';
+import {
+  createDevenvAssertNoneAction,
+  createDevenvSealSecretsAction,
+  createDevenvRemovePlanAction,
+} from './scaffolderDevenv';
 
 export const scaffolderModuleNezamReplace = createBackendModule({
   pluginId: 'scaffolder',
@@ -68,6 +73,10 @@ export const scaffolderModuleNezamReplace = createBackendModule({
           createWaitDbReclaimAction(),
           createCatalogUnregisterAction({ catalog }),
           createRepoCloseAction(),
+          // Dev environments (050):
+          createDevenvAssertNoneAction({ integrations }),
+          createDevenvSealSecretsAction(),
+          createDevenvRemovePlanAction({ integrations }),
         );
       },
     });

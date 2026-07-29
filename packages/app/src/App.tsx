@@ -13,6 +13,7 @@ import { ScaffolderPage, scaffolderPlugin } from '@backstage/plugin-scaffolder';
 import { ScaffolderFieldExtensions } from '@backstage/plugin-scaffolder-react';
 import { GithubRepoTokenFieldExtension } from './scaffolder/GithubRepoTokenField';
 import { OwnedAppPickerExtension } from './scaffolder/OwnedAppPicker';
+import { OwnedDevenvPickerExtension } from './scaffolder/OwnedDevenvPicker/extensions';
 import { GithubCloseTokenFieldExtension } from './scaffolder/GithubCloseTokenField';
 import { orgPlugin } from '@backstage/plugin-org';
 import { SearchPage } from '@backstage/plugin-search';
@@ -99,6 +100,7 @@ const routes = (
       <ScaffolderFieldExtensions>
         <GithubRepoTokenFieldExtension />
         <OwnedAppPickerExtension />
+        <OwnedDevenvPickerExtension />
         <GithubCloseTokenFieldExtension />
       </ScaffolderFieldExtensions>
     </Route>

@@ -1,0 +1,112 @@
+apiVersion: scaffolder.backstage.io/v1beta3
+kind: Template
+metadata:
+  name: close-devenv
+  title: Close a dev environment
+  description: >-
+    Tear down your dev environment (workspace pod, disk, URLs). Your B2
+    backups are RETAINED — request a new environment later and run
+    devbox-restore to get your home dir back. 032-style close flow, minus
+    repo/DB phases (a devenv has neither).
+  tags:
+    - devenv
+    - offboard
+spec:
+  owner: ma-shaaban
+  type: resource
+
+  parameters:
+    - title: Which environment
+      required:
+        - env
+        - confirmName
+      properties:
+        env:
+          title: Environment
+          type: string
+          ui:field: OwnedDevenvPicker
+        confirmName:
+          title: Type the environment name to confirm
+          description: >-
+            Destructive-action gate (ADR-028): the environment's DISK is
+            deleted. B2 backups survive. Must match exactly.
+          type: string
+
+  steps:
+    # 0. THE gate.
+    - id: confirm
+      name: Typed-name confirmation
+      action: nezam:assert:equals
+      input:
+        value: ${{ parameters.confirmName }}
+        expected: ${{ parameters.env }}
+        message: >-
+          The confirmation does not match the environment name. Nothing was
+          changed.
+
+    # 1. Enumerate the env's files from the LIVE tree — rooted at the
+    #    signed-in user, so closing someone else's env is structurally
+    #    impossible.
+    - id: remove-plan
+      name: Plan the removal
+      action: nezam:devenv:remove-plan
+      input:
+        user: ${{ user.entity.metadata.name }}
+        env: ${{ parameters.env }}
+
+    # 2. Removal PR (bot App; auto-merged). Flux prune then GCs the
+    #    namespace, pod, PVC, routes and KEDA CRs.
+    - id: open-removal-pr
+      name: Open the removal PR
+      action: publish:github:pull-request
+      input:
+        repoUrl: github.com?owner=nezam-org&repo=nezam-devops-k3s
+        branchName: devenv-close/${{ user.entity.metadata.name }}-${{ parameters.env }}
+        title: 'devenv: close ${{ user.entity.metadata.name }}/${{ parameters.env }}'
+        description: |
+          ## Close dev environment — audit trail (auto-merged, ADR-028)
+
+          Requested via the developer portal by
+          **@${{ user.entity.metadata.name }}**. Deletes
+          `k8s/devenvs/${{ user.entity.metadata.name }}/${{ parameters.env }}/`;
+          Flux prune removes the namespace, workspace pod, home-dir PVC and
+          KEDA wiring. B2 backups under
+          `devenvs/${{ user.entity.metadata.name }}-${{ parameters.env }}`
+          are retained (restorable via devbox-restore in a future env).
+        sourcePath: ./pr
+        filesToDelete: ${{ steps['remove-plan'].output.filesToDelete }}
+        createWhenEmpty: false
+        update: true
+
+    - id: merge-removal-pr
+      if: ${{ steps['open-removal-pr'].output.pullRequestNumber }}
+      name: Apply via GitOps (auto-merge, ADR-028)
+      action: nezam:github:merge-pr
+      input:
+        owner: nezam-org
+        repo: nezam-devops-k3s
+        pullNumber: ${{ steps['open-removal-pr'].output.pullRequestNumber }}
+
+    # 3. Drop the catalog entity (Resource kind — the generalized 032 action;
+    #    ownership enforced server-side).
+    - id: unregister
+      name: Remove from the catalog
+      action: nezam:catalog:unregister
+      input:
+        app: ${{ user.entity.metadata.name }}-${{ parameters.env }}-devenv
+        kind: resource
+        expectedOwner: ${{ user.entity.metadata.name }}
+
+  output:
+    text:
+      - title: Environment closed
+        content: |
+          The environment and its disk are being removed by Flux (a minute or
+          two). **Your B2 backups are retained** under
+          `devenvs/${{ user.entity.metadata.name }}-${{ parameters.env }}` —
+          request a new environment any time and run `devbox-restore` to get
+          your home dir back. Ask the platform owner to purge the backups if
+          you want them gone.
+    links:
+      - title: Removal PR (audit trail)
+        url: ${{ steps['open-removal-pr'].output.remoteUrl }}

@@ -31,13 +31,21 @@ export const createCatalogUnregisterAction = (options: {
         app: z => z.string(),
         expectedOwner: z =>
           z.string().describe('signed-in login — spec.owner must match'),
+        kind: z =>
+          z
+            .string()
+            .optional()
+            .describe(
+              'entity kind (default component; close-devenv passes resource)',
+            ),
       },
       output: { removed: z => z.boolean() },
     },
     async handler(ctx) {
       const { app, expectedOwner } = ctx.input;
       const credentials = await ctx.getInitiatorCredentials();
-      const entityRef = `component:default/${app}`;
+      const kind = (ctx.input.kind ?? 'component').toLowerCase();
+      const entityRef = `${kind}:default/${app}`;
       const { items } = await catalog.getEntitiesByRefs(
         { entityRefs: [entityRef] },
         { credentials },
