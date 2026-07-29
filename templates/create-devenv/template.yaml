@@ -148,7 +148,7 @@ spec:
           - find: __PVC_SIZE__
             replaceWith: ${{ parameters.pvcSize }}
           - find: __IMAGE_TAG__
-            replaceWith: main-20a8c77
+            replaceWith: main-064b57f
           - find: __EXTENSIONS__
             replaceWith: ${{ parameters.extensions | join(' ') }}
           - find: __SSH_ENABLED__
