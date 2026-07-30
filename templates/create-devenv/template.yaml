@@ -226,7 +226,7 @@ spec:
           # start (the entrypoint runs dockerd then drops to dev). Docker OFF
           # renders the pre-docker manifest byte-identical.
           - find: __SYSBOX_RUNTIME__
-            replaceWith: ${{ 'runtimeClassName: sysbox-runc' if parameters.docker else '' }}
+            replaceWith: "${{ 'runtimeClassName: sysbox-runc' if parameters.docker else '' }}"
           - find: __HOST_USERS__
             replaceWith: ${{ 'false' if parameters.docker else 'true' }}
           - find: __RUN_AS_NON_ROOT__
