@@ -220,7 +220,7 @@ spec:
           - find: __IMAGE_TAG__
             replaceWith: main-1cd70df
           - find: __WEB_IDE__
-            replaceWith: ${{ parameters.webIde }}
+            replaceWith: ${{ 'true' if parameters.webIde else 'false' }}
           # docker (050 F1) is STRUCTURAL, not env-only: sysbox runtime +
           # kubelet user namespaces (required pair) + a userns-root container
           # start (the entrypoint runs dockerd then drops to dev). Docker OFF
@@ -238,11 +238,11 @@ spec:
           - find: __CAPS_DROP__
             replaceWith: ${{ '' if parameters.docker else 'ALL' }}
           - find: __DOCKER__
-            replaceWith: ${{ parameters.docker }}
+            replaceWith: ${{ 'true' if parameters.docker else 'false' }}
           - find: __EXTENSIONS__
             replaceWith: ${{ parameters.extensions | join(' ') }}
           - find: __SSH_ENABLED__
-            replaceWith: ${{ parameters.ssh }}
+            replaceWith: ${{ 'true' if parameters.ssh else 'false' }}
           # backup nightly loop runs only when a bucket was provided
           - find: __BACKUP_ENABLED__
             replaceWith: ${{ 'true' if (parameters.backupBucket and parameters.backupEndpoint) else 'false' }}
