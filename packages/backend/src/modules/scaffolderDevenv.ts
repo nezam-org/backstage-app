@@ -6,16 +6,16 @@
  *     the catalog can lag). Same bot-App tree-scan pattern as
  *     scaffolderRemovePlan.ts.
  *
- *   - nezam:devenv:seal-secrets  — generate the env's web password + restic
- *     password INSIDE the action; emit them only sops-encrypted (age public
- *     key, ADR-027) as the env's devbox-secrets manifest. The web password is
+ *   - nezam:devenv:seal-secrets  — generate the env's web password INSIDE the
+ *     action; assemble the user's OWN S3 backup credentials (BYO bucket, F2)
+ *     into a restic repository; emit them only sops-encrypted (age public key,
+ *     ADR-027) as the env's workspace-secrets manifest. The web password is
  *     argon2id-hashed (code-server HASHED_PASSWORD; hash-wasm = pure WASM, no
  *     native build) and the PLAINTEXT leaves the action exactly once: as the
  *     `webPassword` output the template shows on the completion page (D15).
- *     Shared B2 credentials come from the backstage env
- *     (DEVENVS_B2_KEY_ID/SECRET — dedicated devenvs app key, NEVER the
- *     etcd/appdb DR keys); absent creds degrade cleanly (backup disabled,
- *     web IDE unaffected).
+ *     Backup creds are user-supplied at create time (endpoint/bucket/keys +
+ *     restic password); absent creds degrade cleanly (backup off, web IDE
+ *     unaffected). No shared platform B2 key.
  *
  *   - nezam:devenv:remove-plan   — close-devenv analog of tenant remove-plan:
  *     enumerate k8s/devenvs/<user>/<env>/** from the live tree. No lastApp
@@ -96,7 +96,7 @@ export const createDevenvAssertNoneAction = (options: {
           `You already have a dev environment ("${env}"). The platform ` +
             `currently allows ONE env per user — close it first ` +
             `(Close a dev environment), then request a new one. Your ` +
-            `backups (if enabled) survive the close and devbox-restore ` +
+            `backups (if enabled) survive the close and workspace-restore ` +
             `brings your home dir back.`,
         );
       }
@@ -128,7 +128,7 @@ export const createDevenvSealSecretsAction = () =>
     description:
       'Generate the devenv web password (argon2id-hashed for code-server), ' +
       'assemble the user-supplied S3 backup credentials into a restic ' +
-      'repository, and emit the devbox-secrets manifest sops-encrypted ' +
+      'repository, and emit the workspace-secrets manifest sops-encrypted ' +
       '(ADR-027). Backup is BYO: the user brings their own S3-compatible ' +
       'bucket + keys (task 050 F2). Outputs the plaintext web password ONCE.',
     schema: {
@@ -162,7 +162,7 @@ export const createDevenvSealSecretsAction = () =>
           z
             .string()
             .optional()
-            .describe('repo path/prefix within the bucket (default devbox/<user>-<env>)'),
+            .describe('repo path/prefix within the bucket (default workspace/<user>-<env>)'),
         backupAccessKey: z =>
           z.string().optional().describe('S3 access key id (from scaffolder secret)'),
         backupSecretKey: z =>
@@ -216,7 +216,7 @@ export const createDevenvSealSecretsAction = () =>
         backupEndpoint && backupBucket && backupAccessKey && backupSecretKey,
       );
       const prefix =
-        (ctx.input.backupPrefix ?? '').trim() || `devbox/${user}-${env}`;
+        (ctx.input.backupPrefix ?? '').trim() || `workspace/${user}-${env}`;
       // Provided password wins (needed to attach to an existing repo on
       // reopen); otherwise generate one and surface it once.
       const resticPassword =
@@ -247,7 +247,7 @@ export const createDevenvSealSecretsAction = () =>
         'apiVersion: v1',
         'kind: Secret',
         'metadata:',
-        '  name: devbox-secrets',
+        '  name: workspace-secrets',
         `  namespace: ${namespace}`,
         'type: Opaque',
         'stringData:',
@@ -283,7 +283,7 @@ export const createDevenvSealSecretsAction = () =>
       }
 
       ctx.logger.info(
-        `devenv:seal-secrets — sealed devbox-secrets for ${user}/${env} ` +
+        `devenv:seal-secrets — sealed workspace-secrets for ${user}/${env} ` +
           `(backupConfigured=${wantBackup})`,
       );
       ctx.output('webPassword', webPassword);

@@ -6,7 +6,7 @@ metadata:
   description: >-
     Tear down your dev environment (workspace pod, disk, URLs). Your B2
     backups are RETAINED — request a new environment later and run
-    devbox-restore to get your home dir back. 032-style close flow, minus
+    workspace-restore to get your home dir back. 032-style close flow, minus
     repo/DB phases (a devenv has neither).
   tags:
     - devenv
@@ -72,7 +72,7 @@ spec:
           Flux prune removes the namespace, workspace pod, home-dir PVC and
           KEDA wiring. B2 backups under
           `devenvs/${{ user.entity.metadata.name }}-${{ parameters.env }}`
-          are retained (restorable via devbox-restore in a future env).
+          are retained (restorable via workspace-restore in a future env).
         sourcePath: ./pr
         filesToDelete: ${{ steps['remove-plan'].output.filesToDelete }}
         createWhenEmpty: false
@@ -104,7 +104,7 @@ spec:
           The environment and its disk are being removed by Flux (a minute or
           two). **Your B2 backups are retained** under
           `devenvs/${{ user.entity.metadata.name }}-${{ parameters.env }}` —
-          request a new environment any time and run `devbox-restore` to get
+          request a new environment any time and run `workspace-restore` to get
           your home dir back. Ask the platform owner to purge the backups if
           you want them gone.
     links:

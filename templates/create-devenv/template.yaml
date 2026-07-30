@@ -133,7 +133,7 @@ spec:
           type: string
           description: >-
             Where in the bucket this env's restic repo lives. Default
-            devbox/<you>-<env>. Reopen the SAME env name + same restic
+            workspace/<you>-<env>. Reopen the SAME env name + same restic
             password to auto-restore. Coexists with other data in the bucket.
         backupAccessKey:
           title: S3 Access Key ID
@@ -183,7 +183,7 @@ spec:
 
     # 2. Stamp it. Size presets map inline (S: 100m/500m/512Mi/1Gi,
     #    M: 250m/1/1Gi/2Gi — 050 §4). The image tag is pinned here and bumped
-    #    on devbox-image releases.
+    #    on workspace-image releases.
     - id: personalise
       name: Personalise the environment
       action: nezam:fs:replace
@@ -207,7 +207,7 @@ spec:
           - find: __PVC_SIZE__
             replaceWith: ${{ parameters.pvcSize }}
           - find: __IMAGE_TAG__
-            replaceWith: main-d19a883
+            replaceWith: main-42b4eb2
           - find: __WEB_IDE__
             replaceWith: ${{ parameters.webIde }}
           - find: __EXTENSIONS__
@@ -257,8 +257,8 @@ spec:
 
           - Adds `k8s/devenvs/${{ user.entity.metadata.name }}/${{ parameters.envName }}/`
             (namespace, quota, Cilium fence, ns-jailed kubectl RBAC, PVC,
-            devbox Deployment 0↔1, HTTPRoute → KEDA interceptor,
-            InterceptorRoutes + ScaledObject, sops-sealed devbox-secrets).
+            workspace Deployment 0↔1, HTTPRoute → KEDA interceptor,
+            InterceptorRoutes + ScaledObject, sops-sealed workspace-secrets).
           - Size ${{ parameters.size }}, disk ${{ parameters.pvcSize }},
             ssh=${{ parameters.ssh }},
             backup=${{ 'yes (user bucket)' if steps['seal-secrets'].output.backupConfigured else 'no' }}.
@@ -308,21 +308,21 @@ spec:
           **SSH** (if enabled) — install `wstunnel` (v10+) locally, then add
           to `~/.ssh/config`:
 
-              Host ${{ parameters.envName }}.devbox
+              Host ${{ parameters.envName }}.workspace
                 HostName localhost
                 Port 2222
                 User dev
                 ProxyCommand wstunnel client --log-lvl=off --http-upgrade-path-prefix _ssh -L stdio://%h:%p wss://${{ user.entity.metadata.name }}-${{ parameters.envName }}-ssh.nezam.site:443
 
-          then: `ssh ${{ parameters.envName }}.devbox` — connecting wakes a
+          then: `ssh ${{ parameters.envName }}.workspace` — connecting wakes a
           suspended workspace. Auth = your GitHub keys (github.com/${{ user.entity.metadata.name }}.keys).
 
           **Backup** → your OWN bucket (${{ parameters.backupBucket if parameters.backupBucket else 'not configured' }}).
           ${{ ('Restic password (SAVE THIS — needed to restore later): `' + steps['seal-secrets'].output.resticPassword + '`') if steps['seal-secrets'].output.resticPassword else '' }}
           When enabled: nightly at 03:00 UTC, on suspend, and via
-          `devbox-backup` anytime. Reopen this SAME env name with the SAME
+          `workspace-backup` anytime. Reopen this SAME env name with the SAME
           restic password and it AUTO-RESTORES your home dir on first boot.
-          Snapshots are tagged `host=devbox` so they coexist with any other
+          Snapshots are tagged `host=workspace` so they coexist with any other
           data already in your bucket (e.g. a laptop backup) — nothing else is
           touched. If the bucket holds a repo we can't decrypt, we warn and
           disable backups rather than overwrite (see ~/BACKUP-WARNING.txt).
