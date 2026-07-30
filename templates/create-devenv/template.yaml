@@ -6,7 +6,8 @@ metadata:
   description: >-
     A personal cloud workspace: VS Code (code-server) in the browser + SSH
     from your terminal, with a real toolchain preinstalled (claude, pi,
-    kubectl, k9s, tofu, flux, helm, gh, lazygit, LazyVim, tmux, zsh). Your
+    kubectl, k9s, tofu, flux, helm, gh, lazygit, LazyVim, tmux, zsh) and
+    optional full Docker (build/run/compose — no privileged pod). Your
     home dir persists on disk; the workspace suspends after ~2h idle and
     wakes on access. NO GitHub repo is created. The image ships the platform
     owner's generic dotfiles as defaults — change anything once inside;
@@ -99,6 +100,16 @@ spec:
             SSH from your own terminal, tunneled over 443 — auth via your
             GitHub public keys (github.com/<you>.keys must be non-empty).
             Connecting auto-wakes a suspended workspace.
+        docker:
+          title: Enable Docker
+          type: boolean
+          default: false
+          description: >-
+            Full Docker inside the workspace — build, run, compose, even
+            kind/rootless — no privileged pod (sysbox runtime; the workspace
+            runs on the sysbox-capable node). Docker images/containers do NOT
+            survive suspend (your home dir does). Builds are hungry: pick
+            size M.
     - title: Backup (bring your own bucket — optional but recommended)
       description: >-
         Backups go to YOUR OWN S3-compatible bucket (Backblaze B2, AWS S3,
@@ -207,9 +218,27 @@ spec:
           - find: __PVC_SIZE__
             replaceWith: ${{ parameters.pvcSize }}
           - find: __IMAGE_TAG__
-            replaceWith: main-e54fc38
+            replaceWith: main-1cd70df
           - find: __WEB_IDE__
             replaceWith: ${{ parameters.webIde }}
+          # docker (050 F1) is STRUCTURAL, not env-only: sysbox runtime +
+          # kubelet user namespaces (required pair) + a userns-root container
+          # start (the entrypoint runs dockerd then drops to dev). Docker OFF
+          # renders the pre-docker manifest byte-identical.
+          - find: __SYSBOX_RUNTIME__
+            replaceWith: ${{ 'runtimeClassName: sysbox-runc' if parameters.docker else '' }}
+          - find: __HOST_USERS__
+            replaceWith: ${{ 'false' if parameters.docker else 'true' }}
+          - find: __RUN_AS_NON_ROOT__
+            replaceWith: ${{ 'false' if parameters.docker else 'true' }}
+          - find: __RUN_AS_USER__
+            replaceWith: ${{ '0' if parameters.docker else '1000' }}
+          - find: __ALLOW_PRIVESC__
+            replaceWith: ${{ 'true' if parameters.docker else 'false' }}
+          - find: __CAPS_DROP__
+            replaceWith: ${{ '' if parameters.docker else 'ALL' }}
+          - find: __DOCKER__
+            replaceWith: ${{ parameters.docker }}
           - find: __EXTENSIONS__
             replaceWith: ${{ parameters.extensions | join(' ') }}
           - find: __SSH_ENABLED__
@@ -260,7 +289,8 @@ spec:
             workspace Deployment 0↔1, HTTPRoute → KEDA interceptor,
             InterceptorRoutes + ScaledObject, sops-sealed workspace-secrets).
           - Size ${{ parameters.size }}, disk ${{ parameters.pvcSize }},
-            ssh=${{ parameters.ssh }},
+            ssh=${{ parameters.ssh }}, docker=${{ parameters.docker }}
+            (docker = sysbox runtime + userns, 050 F1),
             backup=${{ 'yes (user bucket)' if steps['seal-secrets'].output.backupConfigured else 'no' }}.
           - NO GitHub repo, NO database — this is a workspace, not an app.
           - Backup (if any) targets the USER's own S3 bucket — the platform
