@@ -109,14 +109,28 @@ export const createDevenvAssertNoneAction = (options: {
 // base64url secrets contain no single quotes, but escape defensively anyway.
 const yq = (v: string) => `'${v.replace(/'/g, "''")}'`;
 
+// Build the restic S3 repository URL from the user's bucket details (F2).
+// restic S3 backend works against ANY S3-compatible provider (B2, AWS, R2,
+// MinIO, Wasabi…): s3:https://<endpoint>/<bucket>/<prefix>.
+function buildResticRepo(
+  endpoint: string,
+  bucket: string,
+  prefix: string,
+): string {
+  const host = endpoint.replace(/^https?:\/\//, '').replace(/\/+$/, '');
+  const p = prefix.replace(/^\/+/, '').replace(/\/+$/, '');
+  return `s3:https://${host}/${bucket}${p ? `/${p}` : ''}`;
+}
+
 export const createDevenvSealSecretsAction = () =>
   createTemplateAction({
     id: 'nezam:devenv:seal-secrets',
     description:
-      'Generate the devenv web password (argon2id-hashed for code-server) ' +
-      'and restic password, add the shared devenvs B2 key from the backstage ' +
-      'env, and emit the devbox-secrets manifest sops-encrypted (ADR-027). ' +
-      'Outputs the plaintext web password ONCE for the completion page.',
+      'Generate the devenv web password (argon2id-hashed for code-server), ' +
+      'assemble the user-supplied S3 backup credentials into a restic ' +
+      'repository, and emit the devbox-secrets manifest sops-encrypted ' +
+      '(ADR-027). Backup is BYO: the user brings their own S3-compatible ' +
+      'bucket + keys (task 050 F2). Outputs the plaintext web password ONCE.',
     schema: {
       input: {
         user: z => z.string(),
@@ -134,17 +148,59 @@ export const createDevenvSealSecretsAction = () =>
             .describe(
               'workspace-relative output path for the ENCRYPTED secrets manifest',
             ),
+        // Backup (all optional; backup is enabled iff bucket+keys+password
+        // are all present). The user brings their OWN storage.
+        backupEndpoint: z =>
+          z
+            .string()
+            .optional()
+            .describe('S3 endpoint host, no scheme (e.g. s3.eu-central-003.backblazeb2.com)'),
+        backupRegion: z =>
+          z.string().optional().describe('region (AWS_DEFAULT_REGION); optional for B2'),
+        backupBucket: z => z.string().optional().describe('bucket name'),
+        backupPrefix: z =>
+          z
+            .string()
+            .optional()
+            .describe('repo path/prefix within the bucket (default devbox/<user>-<env>)'),
+        backupAccessKey: z =>
+          z.string().optional().describe('S3 access key id (from scaffolder secret)'),
+        backupSecretKey: z =>
+          z.string().optional().describe('S3 secret access key (from scaffolder secret)'),
+        resticPassword: z =>
+          z
+            .string()
+            .optional()
+            .describe(
+              'restic repo password; if blank one is generated and returned ONCE. ' +
+                'Must match to restore an existing repo (e.g. on env reopen).',
+            ),
       },
       output: {
         webPassword: z =>
           z.string().describe('plaintext web password — shown once'),
+        resticPassword: z =>
+          z
+            .string()
+            .describe('restic password (generated or provided) — shown once if backup on'),
         backupConfigured: z => z.boolean(),
       },
     },
     async handler(ctx) {
-      const { user, env, namespace, ageRecipient, secretsPath } = ctx.input;
+      const {
+        user,
+        env,
+        namespace,
+        ageRecipient,
+        secretsPath,
+        backupEndpoint,
+        backupRegion,
+        backupBucket,
+        backupAccessKey,
+        backupSecretKey,
+      } = ctx.input;
+
       const webPassword = randomBytes(18).toString('base64url'); // 24 chars
-      const resticPassword = randomBytes(24).toString('base64url'); // 32 chars
       const hashed = await argon2id({
         password: webPassword,
         salt: randomBytes(16),
@@ -155,17 +211,35 @@ export const createDevenvSealSecretsAction = () =>
         outputType: 'encoded', // $argon2id$v=19$... PHC string
       });
 
-      const b2KeyId = process.env.DEVENVS_B2_KEY_ID ?? '';
-      const b2KeySecret = process.env.DEVENVS_B2_KEY_SECRET ?? '';
-      const b2Endpoint =
-        process.env.DEVENVS_B2_ENDPOINT ?? 's3.eu-central-003.backblazeb2.com';
-      const b2Bucket = process.env.DEVENVS_B2_BUCKET ?? 'nezam-devenvs';
-      const backupConfigured = Boolean(b2KeyId && b2KeySecret);
-      if (!backupConfigured) {
-        ctx.logger.warn(
-          'devenv:seal-secrets — DEVENVS_B2_KEY_ID/SECRET not set in the ' +
-            'backstage env; sealing EMPTY B2 creds (web IDE fine, backups ' +
-            'off until the secret is updated).',
+      // Backup is configured only when the user supplied a full set.
+      const wantBackup = Boolean(
+        backupEndpoint && backupBucket && backupAccessKey && backupSecretKey,
+      );
+      const prefix =
+        (ctx.input.backupPrefix ?? '').trim() || `devbox/${user}-${env}`;
+      // Provided password wins (needed to attach to an existing repo on
+      // reopen); otherwise generate one and surface it once.
+      const resticPassword =
+        (ctx.input.resticPassword ?? '').trim() ||
+        randomBytes(24).toString('base64url');
+
+      const stringData: Array<[string, string]> = [
+        ['HASHED_PASSWORD', hashed],
+      ];
+      if (wantBackup) {
+        stringData.push(
+          ['RESTIC_REPOSITORY', buildResticRepo(backupEndpoint!, backupBucket!, prefix)],
+          ['RESTIC_PASSWORD', resticPassword],
+          ['AWS_ACCESS_KEY_ID', backupAccessKey!],
+          ['AWS_SECRET_ACCESS_KEY', backupSecretKey!],
+        );
+        if (backupRegion) {
+          stringData.push(['AWS_DEFAULT_REGION', backupRegion]);
+        }
+      } else {
+        ctx.logger.info(
+          'devenv:seal-secrets — no backup bucket supplied; sealing web ' +
+            'credentials only (backup off).',
         );
       }
 
@@ -177,12 +251,7 @@ export const createDevenvSealSecretsAction = () =>
         `  namespace: ${namespace}`,
         'type: Opaque',
         'stringData:',
-        `  HASHED_PASSWORD: ${yq(hashed)}`,
-        `  RESTIC_PASSWORD: ${yq(resticPassword)}`,
-        `  AWS_ACCESS_KEY_ID: ${yq(b2KeyId)}`,
-        `  AWS_SECRET_ACCESS_KEY: ${yq(b2KeySecret)}`,
-        `  B2_S3_ENDPOINT: ${yq(b2Endpoint)}`,
-        `  B2_BUCKET: ${yq(b2Bucket)}`,
+        ...stringData.map(([k, v]) => `  ${k}: ${yq(v)}`),
         '',
       ].join('\n');
 
@@ -215,10 +284,11 @@ export const createDevenvSealSecretsAction = () =>
 
       ctx.logger.info(
         `devenv:seal-secrets — sealed devbox-secrets for ${user}/${env} ` +
-          `(backupConfigured=${backupConfigured})`,
+          `(backupConfigured=${wantBackup})`,
       );
       ctx.output('webPassword', webPassword);
-      ctx.output('backupConfigured', backupConfigured);
+      ctx.output('resticPassword', wantBackup ? resticPassword : '');
+      ctx.output('backupConfigured', wantBackup);
     },
   });
 

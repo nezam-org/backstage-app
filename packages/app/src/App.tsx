@@ -14,6 +14,7 @@ import { ScaffolderFieldExtensions } from '@backstage/plugin-scaffolder-react';
 import { GithubRepoTokenFieldExtension } from './scaffolder/GithubRepoTokenField';
 import { OwnedAppPickerExtension } from './scaffolder/OwnedAppPicker';
 import { OwnedDevenvPickerExtension } from './scaffolder/OwnedDevenvPicker/extensions';
+import { SecretTextExtension } from './scaffolder/SecretText/extensions';
 import { GithubCloseTokenFieldExtension } from './scaffolder/GithubCloseTokenField';
 import { orgPlugin } from '@backstage/plugin-org';
 import { SearchPage } from '@backstage/plugin-search';
@@ -101,6 +102,7 @@ const routes = (
         <GithubRepoTokenFieldExtension />
         <OwnedAppPickerExtension />
         <OwnedDevenvPickerExtension />
+        <SecretTextExtension />
         <GithubCloseTokenFieldExtension />
       </ScaffolderFieldExtensions>
     </Route>

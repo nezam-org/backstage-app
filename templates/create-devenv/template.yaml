@@ -99,14 +99,64 @@ spec:
             SSH from your own terminal, tunneled over 443 — auth via your
             GitHub public keys (github.com/<you>.keys must be non-empty).
             Connecting auto-wakes a suspended workspace.
-        backup:
-          title: Nightly backup to Backblaze B2 (+ devbox-backup/devbox-restore)
-          type: boolean
-          default: true
+    - title: Backup (bring your own bucket — optional but recommended)
+      description: >-
+        Backups go to YOUR OWN S3-compatible bucket (Backblaze B2, AWS S3,
+        Cloudflare R2, MinIO…) — your storage, your control. Leave the fields
+        blank to run without backup. IMPORTANT: the workspace disk is pinned
+        to one server node; without backup, losing that node loses your home
+        dir. Backup also powers the close → re-request → auto-restore loop.
+      properties:
+        backupProvider:
+          title: Storage provider
+          type: string
+          default: Backblaze B2
+          enum: [Backblaze B2, AWS S3, Cloudflare R2, Other S3-compatible]
           description: >-
-            IMPORTANT — workspace disk is pinned to one server node; without
-            backup, losing that node loses your home dir. Backup also enables
-            the close → re-request → devbox-restore workflow.
+            Just shapes the endpoint hint below — any S3-compatible store works.
+        backupEndpoint:
+          title: S3 endpoint (host, no https://)
+          type: string
+          description: >-
+            B2 → s3.<region>.backblazeb2.com · AWS → s3.<region>.amazonaws.com
+            · R2 → <account>.r2.cloudflarestorage.com. Leave blank for no backup.
+        backupRegion:
+          title: Region
+          type: string
+          description: 'e.g. eu-central-003 (B2) or us-east-1 (AWS). Optional for B2.'
+        backupBucket:
+          title: Bucket name
+          type: string
+          description: 'Your existing bucket (e.g. mahmoud-dev-state).'
+        backupPrefix:
+          title: Repo path/prefix (advanced)
+          type: string
+          description: >-
+            Where in the bucket this env's restic repo lives. Default
+            devbox/<you>-<env>. Reopen the SAME env name + same restic
+            password to auto-restore. Coexists with other data in the bucket.
+        backupAccessKey:
+          title: S3 Access Key ID
+          type: string
+          ui:field: SecretText
+          ui:options:
+            secretKey: BACKUP_ACCESS_KEY
+        backupSecretKey:
+          title: S3 Secret Access Key
+          type: string
+          ui:field: SecretText
+          ui:options:
+            secretKey: BACKUP_SECRET_KEY
+        resticPassword:
+          title: Restic repository password
+          type: string
+          ui:field: SecretText
+          ui:options:
+            secretKey: BACKUP_RESTIC_PASSWORD
+          description: >-
+            Encrypts your backup. SAVE IT — you need the SAME password to
+            restore later (e.g. when you reopen this env). Leave blank and one
+            is generated + shown once on the next screen.
 
   # ---------------------------------------------------------------------------
   # STEPS
@@ -164,13 +214,15 @@ spec:
             replaceWith: ${{ parameters.extensions | join(' ') }}
           - find: __SSH_ENABLED__
             replaceWith: ${{ parameters.ssh }}
+          # backup nightly loop runs only when a bucket was provided
           - find: __BACKUP_ENABLED__
-            replaceWith: ${{ parameters.backup }}
+            replaceWith: ${{ 'true' if (parameters.backupBucket and parameters.backupEndpoint) else 'false' }}
 
-    # 3. Generate + seal the env secrets (050 D15, ADR-027): web password is
-    #    argon2id-hashed for code-server; plaintext appears ONLY in this run's
-    #    output page. B2 creds come from the backstage env (shared devenvs
-    #    key — never the DR keys).
+    # 3. Generate + seal the env secrets (050 D15/F2, ADR-027): web password is
+    #    argon2id-hashed for code-server; the user's OWN S3 backup credentials
+    #    (keys + restic password via SecretText → scaffolder secrets, never in
+    #    the task record) are sealed alongside. Plaintext web + generated restic
+    #    passwords appear ONLY on this run's output page.
     - id: seal-secrets
       name: Generate the workspace credentials (encrypted)
       action: nezam:devenv:seal-secrets
@@ -180,6 +232,13 @@ spec:
         namespace: ${{ user.entity.metadata.name }}-${{ parameters.envName }}-dev
         ageRecipient: age14w6krfhmhpdfysedvennwf63d04ffp2w9h0uap3ax02xkrz4zcmq9hsmt0
         secretsPath: pr/k8s/devenvs/${{ user.entity.metadata.name }}/${{ parameters.envName }}/secrets.sops.yaml
+        backupEndpoint: ${{ parameters.backupEndpoint }}
+        backupRegion: ${{ parameters.backupRegion }}
+        backupBucket: ${{ parameters.backupBucket }}
+        backupPrefix: ${{ parameters.backupPrefix }}
+        backupAccessKey: ${{ secrets.BACKUP_ACCESS_KEY }}
+        backupSecretKey: ${{ secrets.BACKUP_SECRET_KEY }}
+        resticPassword: ${{ secrets.BACKUP_RESTIC_PASSWORD }}
 
     # 4. One PR onto the platform repo = the whole environment (bot App auth;
     #    auto-merged per ADR-028, PR remains as the audit trail).
@@ -201,8 +260,11 @@ spec:
             devbox Deployment 0↔1, HTTPRoute → KEDA interceptor,
             InterceptorRoutes + ScaledObject, sops-sealed devbox-secrets).
           - Size ${{ parameters.size }}, disk ${{ parameters.pvcSize }},
-            ssh=${{ parameters.ssh }}, backup=${{ parameters.backup }}.
+            ssh=${{ parameters.ssh }},
+            backup=${{ 'yes (user bucket)' if steps['seal-secrets'].output.backupConfigured else 'no' }}.
           - NO GitHub repo, NO database — this is a workspace, not an app.
+          - Backup (if any) targets the USER's own S3 bucket — the platform
+            stores only the sops-encrypted credentials, never the data.
 
           Suspends after ~2h with no open connection; wakes on access.
         sourcePath: ./pr
@@ -255,9 +317,15 @@ spec:
           then: `ssh ${{ parameters.envName }}.devbox` — connecting wakes a
           suspended workspace. Auth = your GitHub keys (github.com/${{ user.entity.metadata.name }}.keys).
 
-          **Backup** (if enabled): nightly at 03:00 UTC while awake, plus
-          `devbox-backup` anytime. After closing an env you can request a new
-          one and run `devbox-restore` to get your home dir back.
+          **Backup** → your OWN bucket (${{ parameters.backupBucket if parameters.backupBucket else 'not configured' }}).
+          ${{ ('Restic password (SAVE THIS — needed to restore later): `' + steps['seal-secrets'].output.resticPassword + '`') if steps['seal-secrets'].output.resticPassword else '' }}
+          When enabled: nightly at 03:00 UTC, on suspend, and via
+          `devbox-backup` anytime. Reopen this SAME env name with the SAME
+          restic password and it AUTO-RESTORES your home dir on first boot.
+          Snapshots are tagged `host=devbox` so they coexist with any other
+          data already in your bucket (e.g. a laptop backup) — nothing else is
+          touched. If the bucket holds a repo we can't decrypt, we warn and
+          disable backups rather than overwrite (see ~/BACKUP-WARNING.txt).
     links:
       - title: Open your workspace (web IDE)
         url: https://${{ user.entity.metadata.name }}-${{ parameters.envName }}-dev.nezam.site
