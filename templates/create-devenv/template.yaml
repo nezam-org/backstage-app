@@ -107,9 +107,10 @@ spec:
           description: >-
             Full Docker inside the workspace — build, run, compose, even
             kind/rootless — no privileged pod (sysbox runtime; the workspace
-            runs on the sysbox-capable node). Docker images/containers do NOT
-            survive suspend (your home dir does). Builds are hungry: pick
-            size M.
+            runs on the sysbox-capable node). Also enables VPN clients
+            (a /dev/net/tun device + NET_ADMIN, scoped to the pod). Docker
+            images/containers do NOT survive suspend (your home dir does).
+            Builds are hungry: pick size M.
     - title: Backup (bring your own bucket — optional but recommended)
       description: >-
         Backups go to YOUR OWN S3-compatible bucket (Backblaze B2, AWS S3,
@@ -239,6 +240,15 @@ spec:
             replaceWith: ${{ '' if parameters.docker else 'ALL' }}
           - find: __DOCKER__
             replaceWith: ${{ 'true' if parameters.docker else 'false' }}
+          # docker adds NET_ADMIN + a /dev/net/tun bind-mount (flow-style, one
+          # gated token each) so in-workspace VPN clients can create a tun
+          # device; empty when docker off.
+          - find: __CAPS_ADD__
+            replaceWith: ${{ 'NET_ADMIN' if parameters.docker else '' }}
+          - find: __DOCKER_TUN_MOUNT__
+            replaceWith: "${{ '- {name: tun, mountPath: /dev/net/tun}' if parameters.docker else '' }}"
+          - find: __DOCKER_TUN_VOLUME__
+            replaceWith: "${{ '- {name: tun, hostPath: {path: /dev/net/tun, type: CharDevice}}' if parameters.docker else '' }}"
           - find: __EXTENSIONS__
             replaceWith: ${{ parameters.extensions | join(' ') }}
           - find: __SSH_ENABLED__
