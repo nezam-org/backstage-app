@@ -56,6 +56,15 @@ spec:
           default: 10Gi
           enum: [5Gi, 10Gi, 20Gi]
           ui:widget: radio
+        webIde:
+          title: Web IDE (VS Code in the browser)
+          type: boolean
+          default: true
+          description: >-
+            OFF = terminal-first — saves ~500 MB RAM while awake; the web URL
+            shows connection instructions instead and you work over SSH
+            (tmux + LazyVim preinstalled). Extensions below are ignored when
+            off.
         extensions:
           title: VS Code extensions (Open VSX)
           description: >-
@@ -148,7 +157,9 @@ spec:
           - find: __PVC_SIZE__
             replaceWith: ${{ parameters.pvcSize }}
           - find: __IMAGE_TAG__
-            replaceWith: main-064b57f
+            replaceWith: main-d19a883
+          - find: __WEB_IDE__
+            replaceWith: ${{ parameters.webIde }}
           - find: __EXTENSIONS__
             replaceWith: ${{ parameters.extensions | join(' ') }}
           - find: __SSH_ENABLED__
@@ -223,6 +234,9 @@ spec:
           **Web IDE**: https://${{ user.entity.metadata.name }}-${{ parameters.envName }}-dev.nezam.site
 
           **Password**: `${{ steps['seal-secrets'].output.webPassword }}`
+
+          (Terminal-first envs: the password is unused — the web URL just
+          shows your SSH connection instructions.)
 
           Flux delivers the environment in ~1-2 minutes; the very first page
           load then boots the workspace (image pull may add a few minutes the
