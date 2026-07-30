@@ -64,34 +64,8 @@ spec:
           description: >-
             OFF = terminal-first — saves ~500 MB RAM while awake; the web URL
             shows connection instructions instead and you work over SSH
-            (tmux + LazyVim preinstalled). Extensions below are ignored when
-            off.
-        extensions:
-          title: VS Code extensions (Open VSX)
-          description: >-
-            Preinstalled at first boot. You can install more inside the IDE —
-            they persist on your disk.
-          type: array
-          uniqueItems: true
-          ui:widget: checkboxes
-          default:
-            - ms-python.python
-            - charliermarsh.ruff
-            - redhat.vscode-yaml
-            - eamodio.gitlens
-          items:
-            type: string
-            enum:
-              - ms-python.python
-              - charliermarsh.ruff
-              - dbaeumer.vscode-eslint
-              - esbenp.prettier-vscode
-              - redhat.vscode-yaml
-              - ms-azuretools.vscode-docker
-              - eamodio.gitlens
-              - golang.go
-              - rust-lang.rust-analyzer
-              - ms-toolsai.jupyter
+            (tmux + LazyVim preinstalled). Choosing it reveals an extensions
+            picker below.
         ssh:
           title: Enable SSH access
           type: boolean
@@ -111,6 +85,39 @@ spec:
             (a /dev/net/tun device + NET_ADMIN, scoped to the pod). Docker
             images/containers do NOT survive suspend (your home dir does).
             Builds are hungry: pick size M.
+      # Extensions only make sense with the web IDE → show the picker ONLY when
+      # webIde=true (RJSF schema dependency). Terminal-first hides it entirely.
+      dependencies:
+        webIde:
+          oneOf:
+            - properties:
+                webIde:
+                  const: false
+            - properties:
+                webIde:
+                  const: true
+                extensions:
+                  title: VS Code extensions (Open VSX)
+                  description: >-
+                    Preinstalled at first boot. Add more inside the IDE anytime
+                    — they persist on your disk.
+                  type: array
+                  uniqueItems: true
+                  ui:widget: checkboxes
+                  default: []
+                  items:
+                    type: string
+                    enum:
+                      - ms-python.python
+                      - charliermarsh.ruff
+                      - dbaeumer.vscode-eslint
+                      - esbenp.prettier-vscode
+                      - redhat.vscode-yaml
+                      - ms-azuretools.vscode-docker
+                      - eamodio.gitlens
+                      - golang.go
+                      - rust-lang.rust-analyzer
+                      - ms-toolsai.jupyter
     - title: Backup (bring your own bucket — optional but recommended)
       description: >-
         Backups go to YOUR OWN S3-compatible bucket (Backblaze B2, AWS S3,
@@ -141,12 +148,14 @@ spec:
           type: string
           description: 'Your existing bucket (e.g. mahmoud-dev-state).'
         backupPrefix:
-          title: Repo path/prefix (advanced)
+          title: Project profile
           type: string
           description: >-
-            Where in the bucket this env's restic repo lives. Default
-            workspace/<you>-<env>. Reopen the SAME env name + same restic
-            password to auto-restore. Coexists with other data in the bucket.
+            Which project's workspace to load — this is the restic prefix in
+            your bucket. An EXISTING profile (e.g. ba / appsilon / nezam)
+            restores that project's home on first boot; a NEW name starts a
+            fresh profile whose repo auto-creates on first backup. Leave blank
+            for a plain per-env repo (workspace/<you>-<env>).
         backupAccessKey:
           title: S3 Access Key ID
           type: string
@@ -219,7 +228,7 @@ spec:
           - find: __PVC_SIZE__
             replaceWith: ${{ parameters.pvcSize }}
           - find: __IMAGE_TAG__
-            replaceWith: main-7ae339c
+            replaceWith: main-8c7c30c
           - find: __WEB_IDE__
             replaceWith: ${{ 'true' if parameters.webIde else 'false' }}
           # docker (050 F1) is STRUCTURAL, not env-only: sysbox runtime +
